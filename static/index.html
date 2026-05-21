@@ -326,9 +326,19 @@ const chatHistories = {};
 const chatMessages  = {};
 
 // ── Customers ─────────────────────────────────────────────────────────────────
+// Global fetch wrapper that handles 401 -> redirect to login
+async function apiFetch(url, options={}) {
+  const r = await fetch(url, options);
+  if (r.status === 401) {
+    window.location.href = '/login';
+    throw new Error('Session expired');
+  }
+  return r;
+}
+
 async function loadCustomers() {
   try {
-    const r = await fetch(API + '/api/customers');
+    const r = await apiFetch(API + '/api/customers');
     const d = await r.json();
     customers = d.customers || [];
   } catch(e) { customers = []; }
@@ -395,7 +405,7 @@ async function selectCustomer(name) {
 
 async function deleteCustomer(name) {
   if (!confirm(`Xóa khách hàng "${name}"?`)) return;
-  await fetch(API + `/api/customers/${name}`, {method: 'DELETE'});
+  await apiFetch(API + `/api/customers/${name}`, {method: 'DELETE'});
   if (currentCustomer?.name === name) showInfoPanel();
   await loadCustomers();
 }
@@ -448,7 +458,7 @@ async function saveCustomer() {
   errEl.style.display = 'none';
 
   try {
-    const r = await fetch(API + '/api/customers', {
+    const r = await apiFetch(API + '/api/customers', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({name, clientId: cid, clientSecret: csec, projectId: proj, note})
@@ -497,7 +507,7 @@ async function send() {
   document.getElementById('send-btn').disabled = true;
 
   try {
-    const r = await fetch(API + '/api/chat', {
+    const r = await apiFetch(API + '/api/chat', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({

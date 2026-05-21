@@ -132,13 +132,22 @@ def delete_customer(name):
 
 app = Flask(__name__, static_folder="static")
 app.secret_key = os.getenv("FLASK_SECRET_KEY", "dev-secret-change-in-prod")
-CORS(app)
+app.config.update(
+    SESSION_COOKIE_SECURE=True,
+    SESSION_COOKIE_HTTPONLY=True,
+    SESSION_COOKIE_SAMESITE='Lax',
+)
+CORS(app, supports_credentials=True)
 
 # ── Admin authentication ───────────────────────────────────────────────────────
 def admin_required(f):
+    """For page routes: redirect to login page."""
     @wraps(f)
     def decorated(*args, **kwargs):
         if not session.get("admin_logged_in"):
+            # API routes return JSON 401, page routes redirect
+            if request.path.startswith("/api/"):
+                return jsonify({"error": "Unauthorized", "redirect": "/login"}), 401
             return redirect("/login")
         return f(*args, **kwargs)
     return decorated
