@@ -134,6 +134,15 @@ app = Flask(__name__, static_folder="static")
 app.secret_key = os.getenv("FLASK_SECRET_KEY", "dev-secret-change-in-prod")
 CORS(app)
 
+# ── Admin authentication ───────────────────────────────────────────────────────
+def admin_required(f):
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        if not session.get("admin_logged_in"):
+            return redirect("/login")
+        return f(*args, **kwargs)
+    return decorated
+
 # ── Scheduler setup ───────────────────────────────────────────────────────────
 scheduler = BackgroundScheduler(
     jobstores={'default': MemoryJobStore()},
@@ -1390,16 +1399,7 @@ def customer_page():
     return send_from_directory("static", "customer.html")
 
 
-# ── Admin authentication ───────────────────────────────────────────────────────
-from functools import wraps
-
-def admin_required(f):
-    @wraps(f)
-    def decorated(*args, **kwargs):
-        if not session.get("admin_logged_in"):
-            return redirect("/login")
-        return f(*args, **kwargs)
-    return decorated
+# admin_required moved to top of file
 
 @app.route("/login", methods=["GET"])
 def login_page():
