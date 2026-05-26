@@ -389,7 +389,7 @@ def resources():
 
 # ── Chat endpoint: real-time GN data + Claude ────────────────────────────────
 # ── Intent detection helpers ─────────────────────────────────────────────────
-def detect_action_intent(message, vms, sgs):
+def detect_action_intent(message, vms, sgs, volumes=[]):
     """
     Detect if user wants to execute an action.
     Returns (action_type, params, description) or (None, None, None).
@@ -530,30 +530,47 @@ def detect_action_intent(message, vms, sgs):
             return ("vm_reboot", None, "Bạn muốn reboot VM nào?")
 
     # ── Volume attach/detach ─────────────────────────────────────────────────
+    def find_volume(text):
+        """Find volume by name (case-insensitive partial match), return volume dict with UUID."""
+        for vol in volumes:
+            vname = (vol.get("name") or vol.get("volumeName") or "").lower()
+            if vname and vname in text.lower():
+                return vol
+        # Try extracting word after "volume" keyword
+        import re as _re2
+        m = _re2.search(r'volume\s+([\w\-\.]+)', text.lower())
+        if m:
+            keyword = m.group(1)
+            for vol in volumes:
+                vname = (vol.get("name") or vol.get("volumeName") or "").lower()
+                if keyword in vname or vname in keyword:
+                    return vol
+        return None
+
     if any(w in msg for w in ["gắn volume", "attach volume", "gắn disk"]):
         vm = find_vm(msg)
-        # Find volume by name — look for known volumes in store (passed via vms context)
-        import re as _re
-        # Extract volume name: word after "volume" keyword
-        vol_match = _re.search(r'volume\s+([\w\-\.]+)', msg)
-        vol_name = vol_match.group(1) if vol_match else None
-        if vm and vol_name:
+        vol = find_volume(msg)
+        if vm and vol:
+            vol_id   = vol.get("uuid") or vol.get("id") or vol.get("volumeId")
+            vol_name = vol.get("name") or vol.get("volumeName")
             return ("volume_attach",
                     {"serverId": vm.get("uuid"), "serverName": vm.get("name"),
-                     "volumeId": vol_name, "volumeName": vol_name},
-                    f"Gắn volume **{vol_name}** vào VM **{vm.get('name')}**")
-        return ("volume_attach", None, f"Cần biết: tên VM{' ✓' if vm else ' ✗'} và tên Volume{' ✓' if vol_name else ' ✗'}")
+                     "volumeId": vol_id, "volumeName": vol_name},
+                    f"Gắn volume **{vol_name}** (ID: `{str(vol_id)[:8]}...`) vào VM **{vm.get('name')}**")
+        missing = f"tên VM{' ✓' if vm else ' ✗'} và tên Volume{' ✓' if vol else ' ✗'}"
+        return ("volume_attach", None, f"Không tìm thấy: {missing}. Hỏi 'liệt kê volume' để xem danh sách.")
+
     if any(w in msg for w in ["gỡ volume", "detach volume", "tháo disk", "gỡ disk"]):
         vm = find_vm(msg)
-        import re as _re
-        vol_match = _re.search(r'volume\s+([\w\-\.]+)', msg)
-        vol_name = vol_match.group(1) if vol_match else None
-        if vm and vol_name:
+        vol = find_volume(msg)
+        if vm and vol:
+            vol_id   = vol.get("uuid") or vol.get("id") or vol.get("volumeId")
+            vol_name = vol.get("name") or vol.get("volumeName")
             return ("volume_detach",
                     {"serverId": vm.get("uuid"), "serverName": vm.get("name"),
-                     "volumeId": vol_name, "volumeName": vol_name},
+                     "volumeId": vol_id, "volumeName": vol_name},
                     f"Gỡ volume **{vol_name}** khỏi VM **{vm.get('name')}**")
-        return ("volume_detach", None, f"Cần biết: tên VM{' ✓' if vm else ' ✗'} và tên Volume{' ✓' if vol_name else ' ✗'}")
+        return ("volume_detach", None, "Không tìm thấy VM hoặc Volume. Hỏi 'liệt kê volume' để xem danh sách.")
 
     # ── Floating IP ───────────────────────────────────────────────────────────
     if any(w in msg for w in ["gắn floating", "associate ip", "gắn ip công cộng"]):
@@ -834,7 +851,7 @@ DỮ LIỆU REAL-TIME được cập nhật mỗi lần user gửi tin nhắn.""
 
     # Detect new action intent from this message
     if not confirmed:
-        action_type, params, desc = detect_action_intent(user_message, vms, sgs)
+        action_type, params, desc = detect_action_intent(user_message, vms, sgs, volumes)
         if action_type and params is not None:
             # Handle schedule intent — execute directly, no confirm needed
             if action_type.startswith("schedule_"):
@@ -1189,7 +1206,7 @@ def teams_bot():
                     fips.append({"ip": iface["floatingIp"], "server": s["name"]})
 
         # Check action intent
-        action_type, params, desc = detect_action_intent(message, vms, sgs)
+        action_type, params, desc = detect_action_intent(message, vms, sgs, volumes)
         if action_type and params:
             lower = message.lower()
             if any(w in lower for w in ["xác nhận", "confirm", "yes", "có", "đồng ý"]):
@@ -1724,7 +1741,7 @@ def teams_webhook():
                     fips.append({"ip": iface["floatingIp"], "server": s["name"], "status": iface.get("status","")})
 
         # Check for action intent (stop/start/reboot)
-        action_type, params, desc = detect_action_intent(message, vms, sgs)
+        action_type, params, desc = detect_action_intent(message, vms, sgs, volumes)
         if action_type and params:
             # For Teams: execute action directly (no confirm flow)
             # Add confirmation word detection
