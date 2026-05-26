@@ -132,8 +132,10 @@ def delete_customer(name):
 
 app = Flask(__name__, static_folder="static")
 app.secret_key = os.getenv("FLASK_SECRET_KEY", "dev-secret-change-in-prod")
+# Only use Secure cookies if running on HTTPS
+IS_HTTPS = os.getenv("HTTPS_ENABLED", "false").lower() == "true"
 app.config.update(
-    SESSION_COOKIE_SECURE=True,
+    SESSION_COOKIE_SECURE=IS_HTTPS,
     SESSION_COOKIE_HTTPONLY=True,
     SESSION_COOKIE_SAMESITE='Lax',
 )
