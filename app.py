@@ -618,66 +618,28 @@ def detect_action_intent(message, vms, sgs, volumes=[]):
 
 
 def execute_vm_action(token, uid, project_id, action_type, params):
-    """Execute action and poll for result."""
-    import time
-    P = project_id
-    server_id = params.get("serverId", "")
+    """Execute start/stop/reboot — return immediately, GreenNode processes async."""
+    P         = project_id
+    server_id = params.get("serverId")
+    if not server_id:
+        return False, "Không tìm thấy server ID", None
 
+    # Exact endpoints from VNG Cloud API docs
     ENDPOINT = {
-        "vm_stop":   ("PUT",  f"v2/{P}/servers/{server_id}/stop",   None),
-        "vm_start":  ("PUT",  f"v2/{P}/servers/{server_id}/start",  None),
-        "vm_reboot": ("PUT",  f"v2/{P}/servers/{server_id}/reboot", {"type": "SOFT"}),
+        "vm_stop":   ("PUT", f"v2/{P}/servers/{server_id}/stop",   None),
+        "vm_start":  ("PUT", f"v2/{P}/servers/{server_id}/start",  None),
+        "vm_reboot": ("PUT", f"v2/{P}/servers/{server_id}/reboot", {"type": "SOFT"}),
     }
-    EXPECTED = {"vm_stop": "SHUTOFF", "vm_start": "ACTIVE", "vm_reboot": "ACTIVE"}
 
     method, path, body = ENDPOINT[action_type]
     status, data = gn_api(token, uid, method, path, body)
 
-    if status >= 300:
-        return False, f"API lỗi {status}: {data}", None
+    if status not in (200, 201, 202, 204):
+        return False, f"GreenNode lỗi {status}: {data}", None
 
-    # Poll for actual state change (max 3 minutes)
-    expected = EXPECTED[action_type]
-    # Intermediate states — keep polling, don't give up
-    IN_PROGRESS = {
-        "vm_stop":   ("TURNING-OFF", "STOPPING", "SHUTOFF", "POWERED_OFF"),
-        "vm_start":  ("STARTING", "BOOTING", "ACTIVE"),
-        "vm_reboot": ("REBOOTING", "REBOOT", "STARTING", "ACTIVE"),
-    }
-    for attempt in range(36):  # 36 x 5s = 3 minutes
-        time.sleep(5)
-        s2, d2 = gn_api(token, uid, "GET", f"v2/{P}/servers")
-        if s2 == 200:
-            servers = d2.get("listData", [])
-            vm = next((sv for sv in servers if sv.get("uuid") == server_id), None)
-            if vm:
-                actual = vm.get("status", "UNKNOWN")
-                if actual == expected:
-                    return True, None, vm
-                # Still in transition — keep waiting
-                if actual in IN_PROGRESS.get(action_type, []):
-                    continue
-                # Unexpected error state — stop
-                if actual in ("ERROR", "HARD_REBOOT"):
-                    return False, f"GreenNode báo lỗi — trạng thái: {actual}", vm
+    # Return success immediately — GreenNode processes async in background
+    return True, None, {"status": "PROCESSING", "message": "Lệnh đã được gửi, GreenNode đang xử lý"}
 
-    # Timeout — get final state
-    s3, d3 = gn_api(token, uid, "GET", f"v2/{P}/servers")
-    if s3 == 200:
-        servers = d3.get("listData", [])
-        vm = next((sv for sv in servers if sv.get("uuid") == server_id), None)
-        if vm:
-            actual = vm.get("status", "UNKNOWN")
-            # TURNING-OFF / STOPPING = đang xử lý đúng hướng → SUCCESS
-            if actual in IN_PROGRESS.get(action_type, []) or actual == expected:
-                return True, None, vm
-            # Sai trạng thái hoàn toàn → thất bại thật
-            return False, f"Trạng thái không mong đợi: {actual}", vm
-    # Không lấy được trạng thái — nhưng lệnh đã gửi thành công → SUCCESS
-    return True, None, None
-
-
-@app.route("/api/chat", methods=["POST"])
 def chat():
     """
     Main chat endpoint.
@@ -831,23 +793,15 @@ DỮ LIỆU REAL-TIME được cập nhật mỗi lần user gửi tin nhắn.""
         server_name = params.get("serverName", "VM")
 
         if action_type in ("vm_stop", "vm_start", "vm_reboot"):
-            ok, err, vm_after = execute_vm_action(token, uid, project_id, action_type, params)
+            ok, err, _ = execute_vm_action(token, uid, project_id, action_type, params)
             if ok:
-                actual_status = vm_after.get("status", "?") if vm_after else "?"
-                # Map trạng thái trung gian sang message thân thiện
-                STATUS_MSG = {
-                    "SHUTOFF":     ("🔴", "Đã tắt hoàn toàn"),
-                    "ACTIVE":      ("🟢", "Đang chạy"),
-                    "TURNING-OFF": ("🟡", "Đang tắt — GreenNode đang xử lý, sẽ tắt hoàn toàn trong vài giây"),
-                    "STOPPING":    ("🟡", "Đang tắt — GreenNode đang xử lý"),
-                    "STARTING":    ("🟡", "Đang khởi động — GreenNode đang xử lý"),
-                    "REBOOTING":   ("🟡", "Đang khởi động lại"),
+                action_labels = {
+                    "vm_stop":   "🔴 tắt",
+                    "vm_start":  "🟢 khởi động",
+                    "vm_reboot": "🔄 khởi động lại",
                 }
-                icon, label = STATUS_MSG.get(actual_status, ("⚪", actual_status))
-                if actual_status in ("SHUTOFF", "ACTIVE"):
-                    reply = f"✅ **Thành công!** VM **{server_name}**: {icon} {label}"
-                else:
-                    reply = f"✅ **Lệnh đã thực thi!** VM **{server_name}**: {icon} {label}\n\n*GreenNode sẽ hoàn thành trong 1-2 phút. Hỏi tôi lại để kiểm tra trạng thái.*"
+                label = action_labels.get(action_type, "thực hiện")
+                reply = f"✅ Đã gửi lệnh **{label}** VM **{server_name}**.\n\n⏳ GreenNode đang xử lý — chờ 1-2 phút rồi hỏi lại để kiểm tra trạng thái thực tế."
             else:
                 reply = f"❌ **Thất bại:** {err}\n\nVui lòng thử lại hoặc kiểm tra trên GreenNode portal."
             return jsonify({"reply": reply, "fetchedAt": now, "actionDone": True})
@@ -1479,91 +1433,85 @@ def cancel_schedule(job_id):
 
 # ── Extended actions (Volume, FIP, SG rules, Tag) ────────────────────────────
 def execute_extended_action(token, uid, project_id, action_type, params):
-    """Execute non-VM actions: volume, FIP, SG rules, rename."""
-    P = project_id
-    ok_statuses = (200, 201, 202, 204)
+    """Execute non-VM actions using correct VNG Cloud API endpoints from docs."""
+    P  = project_id
+    OK = (200, 201, 202, 204)
 
-    # ── Volume attach/detach ─────────────────────────────────────────────────
+    # Volume attach: PUT /v2/{projectId}/volumes/{volumeId}/servers/{serverId}/attach
     if action_type == "volume_attach":
-        server_id = params.get("serverId")
         volume_id = params.get("volumeId")
-        print(f"[ATTACH] server={server_id} volume={volume_id} uid={uid} project={P}")
-        
-        # Correct endpoint from GreenNode docs: PUT /v2/{project}/volumes/{vol}/servers/{server}/attach
-        # Get zone from volume info
-        zone_id = params.get("zoneId", "0745BE12-9433-4DD4-90A1-384631504EBE")
-        body_attach = {"persistentVolume": True, "tags": [], "zoneId": zone_id}
-        
-        # GreenNode API: volume_id keeps vol- prefix, server_id strips ins- prefix
-        clean_server = server_id.replace("ins-", "")
+        server_id = params.get("serverId", "").replace("ins-", "")
+        zone_id   = params.get("zoneId", "0745BE12-9433-4DD4-90A1-384631504EBE")
+        print(f"[ATTACH] vol={volume_id} srv={server_id}")
         s, d = gn_api(token, uid, "PUT",
-            f"v2/{P}/volumes/{volume_id}/servers/{clean_server}/attach",
-            body_attach)
-        print(f"[ATTACH] PUT -> {s} {str(d)[:200]}")
-        return s in (200, 201, 202, 204), d
+            f"v2/{P}/volumes/{volume_id}/servers/{server_id}/attach",
+            {"persistentVolume": True, "tags": [], "zoneId": zone_id})
+        print(f"[ATTACH] -> {s} {str(d)[:150]}")
+        return s in OK, d
 
+    # Volume detach: PUT /v2/{projectId}/volumes/{volumeId}/servers/{serverId}/detach
     if action_type == "volume_detach":
-        server_id = params.get("serverId")
         volume_id = params.get("volumeId")
-        status, data = gn_api(token, uid, "DELETE",
-            f"v2/{P}/servers/{server_id}/detachvolume/{volume_id}")
-        return status in ok_statuses, data
+        server_id = params.get("serverId", "").replace("ins-", "")
+        s, d = gn_api(token, uid, "PUT",
+            f"v2/{P}/volumes/{volume_id}/servers/{server_id}/detach", {})
+        return s in OK, d
 
-    # ── Floating IP associate/disassociate ───────────────────────────────────
+    # FIP associate: PUT /v2/{projectId}/servers/{serverId}/attach-wan-ip
     if action_type == "fip_associate":
         server_id   = params.get("serverId")
         floating_ip = params.get("floatingIp")
-        status, data = gn_api(token, uid, "POST",
-            f"v2/{P}/servers/{server_id}/addfloatingip",
-            {"floatingIp": floating_ip})
-        return status in ok_statuses, data
+        s, d = gn_api(token, uid, "PUT",
+            f"v2/{P}/servers/{server_id}/attach-wan-ip",
+            {"wanIp": floating_ip})
+        return s in OK, d
 
+    # FIP disassociate: PUT /v2/{projectId}/servers/{serverId}/detach-wan-ip
     if action_type == "fip_disassociate":
-        server_id   = params.get("serverId")
-        floating_ip = params.get("floatingIp")
-        status, data = gn_api(token, uid, "POST",
-            f"v2/{P}/servers/{server_id}/removefloatingip",
-            {"floatingIp": floating_ip})
-        return status in ok_statuses, data
+        server_id = params.get("serverId")
+        s, d = gn_api(token, uid, "PUT",
+            f"v2/{P}/servers/{server_id}/detach-wan-ip", {})
+        return s in OK, d
 
-    # ── SG rule add/remove ───────────────────────────────────────────────────
+    # Update SecGroups: PUT /v2/{projectId}/servers/{serverId}/secgroups
+    if action_type in ("sg_attach", "sg_detach"):
+        server_id = params.get("serverId")
+        sg_ids    = params.get("sgIds", [])
+        s, d = gn_api(token, uid, "PUT",
+            f"v2/{P}/servers/{server_id}/secgroups",
+            {"secGroupIds": sg_ids})
+        return s in OK, d
+
+    # SG rule add: POST /v2/{projectId}/securitygrouprules
     if action_type == "sg_rule_add":
-        sg_id = params.get("sgId")
-        rule  = params.get("rule", {})
-        # rule = {protocol, direction, portRangeMin, portRangeMax, remoteIpPrefix, ethertype}
-        status, data = gn_api(token, uid, "POST",
-            f"v2/{P}/securitygroups/{sg_id}/securitygrouprules", rule)
-        return status in ok_statuses, data
+        rule = params.get("rule", {})
+        s, d = gn_api(token, uid, "POST", f"v2/{P}/securitygrouprules", rule)
+        return s in OK, d
 
+    # SG rule remove: DELETE /v2/{projectId}/securitygrouprules/{id}
     if action_type == "sg_rule_remove":
-        sg_id   = params.get("sgId")
         rule_id = params.get("ruleId")
-        status, data = gn_api(token, uid, "DELETE",
-            f"v2/{P}/securitygroups/{sg_id}/securitygrouprules/{rule_id}")
-        return status in ok_statuses, data
+        s, d = gn_api(token, uid, "DELETE", f"v2/{P}/securitygrouprules/{rule_id}")
+        return s in OK, d
 
-    # ── Rename VM ────────────────────────────────────────────────────────────
+    # Rename VM: PUT /v2/{projectId}/servers/{serverId}/rename
     if action_type == "vm_rename":
         server_id = params.get("serverId")
         new_name  = params.get("newName")
-        status, data = gn_api(token, uid, "PUT",
-            f"v2/{P}/servers/{server_id}",
-            {"name": new_name})
-        return status in ok_statuses, data
+        s, d = gn_api(token, uid, "PUT",
+            f"v2/{P}/servers/{server_id}/rename", {"name": new_name})
+        return s in OK, d
 
-    # ── Rename Volume ────────────────────────────────────────────────────────
+    # Rename Volume: PUT /v2/{projectId}/volumes/{volumeId}/rename
     if action_type == "volume_rename":
         volume_id = params.get("volumeId")
         new_name  = params.get("newName")
-        status, data = gn_api(token, uid, "PUT",
-            f"v2/{P}/volumes/{volume_id}",
-            {"name": new_name})
-        return status in ok_statuses, data
+        s, d = gn_api(token, uid, "PUT",
+            f"v2/{P}/volumes/{volume_id}/rename", {"name": new_name})
+        return s in OK, d
 
     return False, {"error": f"Unknown action: {action_type}"}
 
-# ── Teams Tab config page ─────────────────────────────────────────────────────
-@app.route("/teams-config")
 def teams_config():
     """Required by Teams for configurable tabs."""
     return """<!DOCTYPE html>
