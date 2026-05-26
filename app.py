@@ -254,9 +254,10 @@ def gn_api(token, user_id, method, path, body=None):
     """Call GreenNode vServer API."""
     url = f"{GN_API_BASE}/{path}"
     headers = {
-        "Authorization":  f"Bearer {token}",
-        "Content-Type":   "application/json",
-        "portal-user-id": str(user_id),
+        "Authorization":    f"Bearer {token}",
+        "Content-Type":     "application/json",
+        "portal-user-id":   str(user_id),
+        "x-portal-user-id": str(user_id),
     }
     r = requests.request(method, url, headers=headers,
                          json=body, verify=False, timeout=20)
@@ -340,7 +341,7 @@ def resources():
         return jsonify({"error": "clientId and projectId required"}), 400
     try:
         token, user_info = fetch_gn_token(client_id, client_secret)
-        uid = user_info.get("userId", "0")
+        uid = str(user_info.get("accountId") or user_info.get("userId", "0"))
         P   = project_id
 
         result = {}
@@ -701,7 +702,7 @@ def chat():
     # 1. Fetch fresh GN data
     try:
         token, user_info = fetch_gn_token(client_id, client_secret)
-        uid = user_info.get("userId", "0")
+        uid = str(user_info.get("accountId") or user_info.get("userId", "0"))
         P   = project_id
 
         vms,  volumes,  networks = [], [], []
@@ -1004,7 +1005,7 @@ def action2():
 
     try:
         token, user_info = fetch_gn_token(client_id, client_secret)
-        uid = user_info.get("userId", "0")
+        uid = str(user_info.get("accountId") or user_info.get("userId", "0"))
         ok, data = execute_extended_action(token, uid, project_id, action_type, params)
         return jsonify({"ok": ok, "data": data})
     except Exception as e:
@@ -1022,7 +1023,7 @@ def action():
 
     try:
         token, user_info = fetch_gn_token(client_id, client_secret)
-        uid = user_info.get("userId", "0")
+        uid = str(user_info.get("accountId") or user_info.get("userId", "0"))
         P   = project_id
         server_id = params.get("serverId", "")
 
@@ -1178,7 +1179,7 @@ def teams_bot():
 
     try:
         token, user_info = fetch_gn_token(cid, csec)
-        uid = user_info.get("userId", "0")
+        uid = str(user_info.get("accountId") or user_info.get("userId", "0"))
         P   = proj
 
         # Fetch real-time data
@@ -1275,7 +1276,7 @@ def run_scheduled_job(job_id: str):
         action_type = job["action"]
         params      = job["params"]
         token, user_info = fetch_gn_token(creds["clientId"], creds["clientSecret"])
-        uid = user_info.get("userId", "0")
+        uid = str(user_info.get("accountId") or user_info.get("userId", "0"))
         ok, err, vm_after = execute_vm_action(token, uid, creds["projectId"], action_type, params)
         status = vm_after.get("status", "?") if vm_after else "unknown"
         print(f"[SCHEDULE] Job {job_id}: {action_type} on {params.get('serverName')} → {status}")
@@ -1712,7 +1713,7 @@ def teams_webhook():
     try:
         # Fetch GreenNode token + data
         token, user_info = fetch_gn_token(cid, csec)
-        uid = user_info.get("userId", "0")
+        uid = str(user_info.get("accountId") or user_info.get("userId", "0"))
         P   = proj
 
         vms, volumes, networks = [], [], []
