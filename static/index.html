@@ -326,14 +326,37 @@ const chatHistories = {};
 const chatMessages  = {};
 
 // ── Customers ─────────────────────────────────────────────────────────────────
-// Global fetch wrapper that handles 401 -> redirect to login
+// Global fetch wrapper with token auth + 401 handler
+const ADMIN_TOKEN_KEY = 'gn_admin_token';
+
 async function apiFetch(url, options={}) {
+  const token = localStorage.getItem(ADMIN_TOKEN_KEY) || '';
+  options.headers = options.headers || {};
+  if (token) options.headers['X-Admin-Token'] = token;
+  options.credentials = 'include';
   const r = await fetch(url, options);
   if (r.status === 401) {
+    localStorage.removeItem(ADMIN_TOKEN_KEY);
     window.location.href = '/login';
     throw new Error('Session expired');
   }
   return r;
+}
+
+// On load: verify stored token
+async function verifyStoredToken() {
+  const token = localStorage.getItem(ADMIN_TOKEN_KEY);
+  if (!token) { window.location.href = '/login'; return; }
+  try {
+    const r = await fetch('/api/verify-token', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({token}),
+      credentials: 'include'
+    });
+    const d = await r.json();
+    if (!d.ok) { localStorage.removeItem(ADMIN_TOKEN_KEY); window.location.href = '/login'; }
+  } catch(e) { /* offline, continue */ }
 }
 
 async function loadCustomers() {
@@ -407,7 +430,8 @@ async function deleteCustomer(name) {
   if (!confirm(`Xóa khách hàng "${name}"?`)) return;
   await apiFetch(API + `/api/customers/${name}`, {method: 'DELETE'});
   if (currentCustomer?.name === name) showInfoPanel();
-  await loadCustomers();
+  await // Verify admin token on page load
+verifyStoredToken().then(() => loadCustomers());
 }
 
 // ── Info panel ────────────────────────────────────────────────────────────────

@@ -139,17 +139,44 @@ app.config.update(
 )
 CORS(app, supports_credentials=True)
 
+# ── Global error handlers ─────────────────────────────────────────────────────
+@app.errorhandler(404)
+def not_found(e):
+    if request.path.startswith('/api/'):
+        return jsonify({"error": "Not found"}), 404
+    return redirect('/login')
+
+@app.errorhandler(500)
+def server_error(e):
+    return jsonify({"error": f"Server error: {str(e)}"}), 500
+
+@app.errorhandler(Exception)
+def handle_exception(e):
+    if request.path.startswith('/api/'):
+        return jsonify({"error": str(e)}), 500
+    raise e
+
 # ── Admin authentication ───────────────────────────────────────────────────────
 def admin_required(f):
-    """For page routes: redirect to login page."""
+    """Check session OR Authorization header token."""
     @wraps(f)
     def decorated(*args, **kwargs):
-        if not session.get("admin_logged_in"):
-            # API routes return JSON 401, page routes redirect
-            if request.path.startswith("/api/"):
-                return jsonify({"error": "Unauthorized", "redirect": "/login"}), 401
-            return redirect("/login")
-        return f(*args, **kwargs)
+        # Check session
+        if session.get("admin_logged_in"):
+            return f(*args, **kwargs)
+        # Check Authorization header (Bearer token)
+        auth = request.headers.get("Authorization", "")
+        if auth.startswith("Bearer "):
+            token = auth[7:]
+            if token == make_admin_token():
+                return f(*args, **kwargs)
+        # Check X-Admin-Token header
+        token = request.headers.get("X-Admin-Token", "")
+        if token and token == make_admin_token():
+            return f(*args, **kwargs)
+        if request.path.startswith("/api/"):
+            return jsonify({"error": "Unauthorized", "redirect": "/login"}), 401
+        return redirect("/login")
     return decorated
 
 # ── Scheduler setup ───────────────────────────────────────────────────────────
@@ -1459,26 +1486,45 @@ document.getElementById('form').addEventListener('submit', async e => {
     body: JSON.stringify({username: document.getElementById('u').value, password: document.getElementById('p').value})
   });
   const d = await r.json();
-  if (d.ok) window.location.href = '/';
-  else { document.getElementById('err').style.display = 'block'; }
+  if (d.ok) {
+    localStorage.setItem('gn_admin_token', d.token);
+    window.location.href = '/';
+  } else { document.getElementById('err').style.display = 'block'; }
 });
 document.getElementById('u').focus();
 </script>
 </body>
 </html>"""
 
+import hashlib, secrets as _secrets
+
+def make_admin_token():
+    """Generate a deterministic token from credentials."""
+    raw = f"{ADMIN_USERNAME}:{ADMIN_PASSWORD}:{app.secret_key}"
+    return hashlib.sha256(raw.encode()).hexdigest()[:32]
+
 @app.route("/api/login", methods=["POST"])
 def api_login():
     body = request.get_json() or {}
     if body.get("username") == ADMIN_USERNAME and body.get("password") == ADMIN_PASSWORD:
         session["admin_logged_in"] = True
-        return jsonify({"ok": True})
+        token = make_admin_token()
+        return jsonify({"ok": True, "token": token})
     return jsonify({"ok": False, "error": "Invalid credentials"}), 401
 
 @app.route("/api/logout", methods=["POST"])
 def api_logout():
     session.clear()
     return jsonify({"ok": True})
+
+@app.route("/api/verify-token", methods=["POST"])
+def verify_token():
+    body = request.get_json() or {}
+    token = body.get("token", "")
+    valid = token == make_admin_token()
+    if valid:
+        session["admin_logged_in"] = True
+    return jsonify({"ok": valid})
 
 # ── Serve static chatbot UI ───────────────────────────────────────────────────
 @app.route("/")
