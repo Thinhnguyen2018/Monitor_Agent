@@ -762,18 +762,18 @@ HƯỚNG DẪN TRẢ LỜI:
 - Trạng thái VM: 🟢 ACTIVE · 🔴 SHUTOFF · 🟡 BUILD · ⚪ khác
 - Phát hiện vấn đề: ⚠️ orphan resource, 🚨 security risk, ❌ lỗi
 - Khi user muốn thực hiện action trên hạ tầng (bất kể cách diễn đạt), trả về JSON đặc biệt:
-  {{"__action__": "<loại action>", "params": {{...}}, "desc": "<mô tả>"}}
-  Các loại action:
-  - vm_start: {{"serverId": "...", "serverName": "..."}}
-  - vm_stop: {{"serverId": "...", "serverName": "..."}}
-  - vm_reboot: {{"serverId": "...", "serverName": "..."}}
-  - volume_attach: {{"serverId": "...", "serverName": "...", "volumeId": "...", "volumeName": "...", "zoneId": "..."}}
-  - volume_detach: {{"serverId": "...", "serverName": "...", "volumeId": "...", "volumeName": "..."}}
-  - fip_associate: {{"serverId": "...", "serverName": "...", "floatingIp": "..."}}
-  - fip_disassociate: {{"serverId": "...", "serverName": "..."}}
-  - vm_rename: {{"serverId": "...", "serverName": "...", "newName": "..."}}
-  QUAN TRỌNG: Chỉ trả về JSON thuần, không có text xung quanh khi detect action
-  Nếu thiếu thông tin (không biết VM nào, volume nào), hỏi lại user thay vì đoán
+  {{"__action__": "<loại action>", "params": {{...}}, "desc": "<mô tả ngắn>"}}
+  Các loại action và params:
+  - vm_start/vm_stop/vm_reboot: {{"serverId": "uuid", "serverName": "tên"}}
+  - volume_attach: {{"serverId": "uuid", "serverName": "tên", "volumeId": "uuid", "volumeName": "tên", "zoneId": "uuid"}}
+  - volume_detach: {{"serverId": "uuid", "serverName": "tên", "volumeId": "uuid", "volumeName": "tên"}}
+  - fip_associate: {{"serverId": "uuid", "serverName": "tên", "floatingIp": "ip"}}
+  - fip_disassociate: {{"serverId": "uuid", "serverName": "tên"}}
+  - vm_rename: {{"serverId": "uuid", "serverName": "tên", "newName": "tên mới"}}
+  - volume_rename: {{"volumeId": "uuid", "volumeName": "tên", "newName": "tên mới"}}
+  - sg_attach/sg_detach: {{"serverId": "uuid", "serverName": "tên", "sgIds": ["uuid"]}}
+  ⚠️ QUAN TRỌNG: Chỉ trả về JSON thuần duy nhất, KHÔNG có text hay markdown xung quanh.
+  Nếu thiếu thông tin cần thiết, hỏi lại user thay vì đoán.
 
 QUAN TRỌNG — ĐỘ TRỄ TRẠNG THÁI:
 GreenNode API nhận lệnh ngay lập tức nhưng việc thực thi thực tế cần 30-120 giây.
@@ -956,22 +956,37 @@ DỮ LIỆU REAL-TIME được cập nhật mỗi lần user gửi tin nhắn.""
         data  = r.json()
         reply = data["choices"][0]["message"]["content"]
         
-        # Check if LLM returned structured action JSON (may be wrapped in ```json ... ```)
+        # Check if LLM returned structured action JSON
         import json as _json, re as _re
         action_data = None
-        reply_clean = reply.strip()
-        # Strip markdown code blocks
-        reply_clean = _re.sub(r'^```(?:json)?\s*', '', reply_clean)
-        reply_clean = _re.sub(r'\s*```$', '', reply_clean).strip()
+        reply_work = reply.strip()
+        
+        # Try 1: Strip ```json ... ``` blocks and parse
+        cleaned = _re.sub(r'```(?:json)?\s*', '', reply_work).strip().rstrip('`').strip()
         try:
-            d = _json.loads(reply_clean)
+            d = _json.loads(cleaned)
             if "__action__" in d:
                 action_data = d
-        except:
-            # Try finding JSON object anywhere in text
-            m = _re.search(r'\{[^{}]*"__action__"[^{}]*\}', reply)
-            if m:
-                try: action_data = _json.loads(m.group())
+        except: pass
+        
+        # Try 2: Find JSON object anywhere in reply
+        if not action_data:
+            for m in _re.finditer(r'\{[^{}]*"__action__"[^{}]*\}', reply_work, _re.DOTALL):
+                try:
+                    d = _json.loads(m.group())
+                    if "__action__" in d:
+                        action_data = d
+                        break
+                except: pass
+        
+        # Try 3: Find JSON in code block content
+        if not action_data:
+            for m in _re.finditer(r'```(?:json)?\s*(\{.*?\})\s*```', reply_work, _re.DOTALL):
+                try:
+                    d = _json.loads(m.group(1))
+                    if "__action__" in d:
+                        action_data = d
+                        break
                 except: pass
         
         if action_data:
