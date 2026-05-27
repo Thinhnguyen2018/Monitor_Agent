@@ -86,6 +86,10 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;backgrou
       <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
       Admin
     </a>
+    <button onclick="toggleHelp()" style="background:none;border:1px solid #ddd;border-radius:8px;padding:4px 11px;font-size:12px;color:#666;cursor:pointer;display:inline-flex;align-items:center;gap:5px;font-family:inherit">
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+      Hướng dẫn
+    </button>
     <span class="badge" id="conn-badge">● chưa kết nối</span>
     <span class="badge" id="live-badge">● offline</span>
   </div>
@@ -97,6 +101,99 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;backgrou
   <input id="proj"  type="text"     placeholder="Project ID (pro-xxx...)" spellcheck="false" autocomplete="off"/>
   <button class="btn primary" id="conn-btn" onclick="connect()">⚡ Kết nối</button>
   <button class="btn" id="refresh-btn" onclick="connect()" style="display:none">🔄 Làm mới</button>
+</div>
+
+<!-- Help Panel -->
+<div id="help-panel" style="display:none;position:fixed;top:0;right:0;width:360px;height:100vh;background:#fff;border-left:1px solid #e8e8e0;z-index:200;overflow-y:auto;box-shadow:-4px 0 16px rgba(0,0,0,0.08)">
+  <div style="padding:16px 20px;border-bottom:1px solid #e8e8e0;display:flex;justify-content:space-between;align-items:center">
+    <div style="font-size:14px;font-weight:500;color:#1a1a1a">📖 Hướng dẫn sử dụng</div>
+    <button onclick="toggleHelp()" style="background:none;border:none;font-size:18px;cursor:pointer;color:#666;padding:0 4px">✕</button>
+  </div>
+  <div style="padding:16px 20px;font-size:13px;color:#444;line-height:1.6">
+
+    <!-- Xem thông tin -->
+    <div style="margin-bottom:16px">
+      <div style="font-size:12px;font-weight:600;color:#185fa5;text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px">👁 Xem thông tin</div>
+      <div style="display:flex;flex-direction:column;gap:5px">
+        <div style="background:#f5f9ff;border-radius:6px;padding:7px 10px"><span style="font-family:monospace;font-size:12px;color:#0a5c2f">liệt kê tất cả VM</span><div style="font-size:11px;color:#666;margin-top:2px">Xem VM, trạng thái, IP, flavor</div></div>
+        <div style="background:#f5f9ff;border-radius:6px;padding:7px 10px"><span style="font-family:monospace;font-size:12px;color:#0a5c2f">liệt kê volume</span><div style="font-size:11px;color:#666;margin-top:2px">Danh sách volume và trạng thái</div></div>
+        <div style="background:#f5f9ff;border-radius:6px;padding:7px 10px"><span style="font-family:monospace;font-size:12px;color:#0a5c2f">danh sách security group</span><div style="font-size:11px;color:#666;margin-top:2px">SG và rules hiện có</div></div>
+        <div style="background:#f5f9ff;border-radius:6px;padding:7px 10px"><span style="font-family:monospace;font-size:12px;color:#0a5c2f">liệt kê floating IP</span><div style="font-size:11px;color:#666;margin-top:2px">WAN IP đang có và trạng thái</div></div>
+        <div style="background:#f5f9ff;border-radius:6px;padding:7px 10px"><span style="font-family:monospace;font-size:12px;color:#0a5c2f">tóm tắt hạ tầng</span><div style="font-size:11px;color:#666;margin-top:2px">Báo cáo tổng quan toàn bộ</div></div>
+      </div>
+    </div>
+
+    <!-- Phân tích -->
+    <div style="margin-bottom:16px">
+      <div style="font-size:12px;font-weight:600;color:#185fa5;text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px">🔍 Phân tích</div>
+      <div style="display:flex;flex-direction:column;gap:5px">
+        <div style="background:#f5f9ff;border-radius:6px;padding:7px 10px"><span style="font-family:monospace;font-size:12px;color:#0a5c2f">kiểm tra health server</span><div style="font-size:11px;color:#666;margin-top:2px">Phát hiện VM SHUTOFF/ERROR bất thường</div></div>
+        <div style="background:#f5f9ff;border-radius:6px;padding:7px 10px"><span style="font-family:monospace;font-size:12px;color:#0a5c2f">tìm orphan resources</span><div style="font-size:11px;color:#666;margin-top:2px">Volume/IP không dùng, lãng phí chi phí</div></div>
+        <div style="background:#f5f9ff;border-radius:6px;padding:7px 10px"><span style="font-family:monospace;font-size:12px;color:#0a5c2f">audit security group</span><div style="font-size:11px;color:#666;margin-top:2px">Tìm rules nguy hiểm (mở toàn bộ internet)</div></div>
+        <div style="background:#f5f9ff;border-radius:6px;padding:7px 10px"><span style="font-family:monospace;font-size:12px;color:#0a5c2f">topology hạ tầng</span><div style="font-size:11px;color:#666;margin-top:2px">Sơ đồ VM → SG → VPC</div></div>
+      </div>
+    </div>
+
+    <!-- Quản lý VM -->
+    <div style="margin-bottom:16px">
+      <div style="font-size:12px;font-weight:600;color:#0f9d58;text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px">⚡ Quản lý VM</div>
+      <div style="display:flex;flex-direction:column;gap:5px">
+        <div style="background:#f0fff4;border-radius:6px;padding:7px 10px"><span style="font-family:monospace;font-size:12px;color:#0a5c2f">tắt VM ThinhNNG_Server</span><div style="font-size:11px;color:#666;margin-top:2px">Stop VM (có xác nhận)</div></div>
+        <div style="background:#f0fff4;border-radius:6px;padding:7px 10px"><span style="font-family:monospace;font-size:12px;color:#0a5c2f">bật VM ThinhNNG_Server</span><div style="font-size:11px;color:#666;margin-top:2px">Start VM (có xác nhận)</div></div>
+        <div style="background:#f0fff4;border-radius:6px;padding:7px 10px"><span style="font-family:monospace;font-size:12px;color:#0a5c2f">khởi động lại VM ThinhNNG</span><div style="font-size:11px;color:#666;margin-top:2px">Reboot VM</div></div>
+        <div style="background:#f0fff4;border-radius:6px;padding:7px 10px"><span style="font-family:monospace;font-size:12px;color:#0a5c2f">đổi tên VM Test thành Prod</span><div style="font-size:11px;color:#666;margin-top:2px">Đổi tên hiển thị</div></div>
+        <div style="background:#f0fff4;border-radius:6px;padding:7px 10px"><span style="font-family:monospace;font-size:12px;color:#0a5c2f">tạo snapshot cho VM ThinhNNG</span><div style="font-size:11px;color:#666;margin-top:2px">Tạo điểm khôi phục</div></div>
+        <div style="background:#f0fff4;border-radius:6px;padding:7px 10px"><span style="font-family:monospace;font-size:12px;color:#0a5c2f">resize VM sang flav-xxx</span><div style="font-size:11px;color:#666;margin-top:2px">Thay đổi cấu hình CPU/RAM</div></div>
+        <div style="background:#fff0f0;border-radius:6px;padding:7px 10px;border:1px solid #fdd"><span style="font-family:monospace;font-size:12px;color:#c62828">xóa VM Test_Server</span><div style="font-size:11px;color:#c62828;margin-top:2px">⚠️ Xóa vĩnh viễn — không thể khôi phục</div></div>
+      </div>
+    </div>
+
+    <!-- Quản lý Volume -->
+    <div style="margin-bottom:16px">
+      <div style="font-size:12px;font-weight:600;color:#0f9d58;text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px">💾 Quản lý Volume</div>
+      <div style="display:flex;flex-direction:column;gap:5px">
+        <div style="background:#f0fff4;border-radius:6px;padding:7px 10px"><span style="font-family:monospace;font-size:12px;color:#0a5c2f">gắn volume Test vào VM ThinhNNG</span><div style="font-size:11px;color:#666;margin-top:2px">Attach volume</div></div>
+        <div style="background:#f0fff4;border-radius:6px;padding:7px 10px"><span style="font-family:monospace;font-size:12px;color:#0a5c2f">gỡ volume Test khỏi VM ThinhNNG</span><div style="font-size:11px;color:#666;margin-top:2px">Detach volume</div></div>
+        <div style="background:#f0fff4;border-radius:6px;padding:7px 10px"><span style="font-family:monospace;font-size:12px;color:#0a5c2f">đổi tên volume Test thành Data</span><div style="font-size:11px;color:#666;margin-top:2px">Đổi tên volume</div></div>
+        <div style="background:#f0fff4;border-radius:6px;padding:7px 10px"><span style="font-family:monospace;font-size:12px;color:#0a5c2f">tạo volume 50GB</span><div style="font-size:11px;color:#666;margin-top:2px">Tạo volume mới</div></div>
+        <div style="background:#fff0f0;border-radius:6px;padding:7px 10px;border:1px solid #fdd"><span style="font-family:monospace;font-size:12px;color:#c62828">xóa volume Test_Volume</span><div style="font-size:11px;color:#c62828;margin-top:2px">⚠️ Xóa vĩnh viễn — mất dữ liệu</div></div>
+      </div>
+    </div>
+
+    <!-- Security Group -->
+    <div style="margin-bottom:16px">
+      <div style="font-size:12px;font-weight:600;color:#0f9d58;text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px">🔒 Security Group</div>
+      <div style="display:flex;flex-direction:column;gap:5px">
+        <div style="background:#f0fff4;border-radius:6px;padding:7px 10px"><span style="font-family:monospace;font-size:12px;color:#0a5c2f">gắn SG Default vào VM ThinhNNG</span><div style="font-size:11px;color:#666;margin-top:2px">Thêm Security Group vào VM</div></div>
+        <div style="background:#f0fff4;border-radius:6px;padding:7px 10px"><span style="font-family:monospace;font-size:12px;color:#0a5c2f">gỡ SG Default khỏi VM ThinhNNG</span><div style="font-size:11px;color:#666;margin-top:2px">Xóa Security Group khỏi VM</div></div>
+        <div style="background:#f0fff4;border-radius:6px;padding:7px 10px"><span style="font-family:monospace;font-size:12px;color:#0a5c2f">thêm rule mở port 8080 TCP inbound SG Default</span><div style="font-size:11px;color:#666;margin-top:2px">Thêm inbound/outbound rule</div></div>
+      </div>
+    </div>
+
+    <!-- Floating IP -->
+    <div style="margin-bottom:16px">
+      <div style="font-size:12px;font-weight:600;color:#0f9d58;text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px">🌐 Floating IP</div>
+      <div style="display:flex;flex-direction:column;gap:5px">
+        <div style="background:#f0fff4;border-radius:6px;padding:7px 10px"><span style="font-family:monospace;font-size:12px;color:#0a5c2f">gắn floating IP vào VM ThinhNNG</span><div style="font-size:11px;color:#666;margin-top:2px">Associate WAN IP</div></div>
+        <div style="background:#f0fff4;border-radius:6px;padding:7px 10px"><span style="font-family:monospace;font-size:12px;color:#0a5c2f">gỡ floating IP khỏi VM ThinhNNG</span><div style="font-size:11px;color:#666;margin-top:2px">Disassociate WAN IP</div></div>
+      </div>
+    </div>
+
+    <!-- Lịch hẹn -->
+    <div style="margin-bottom:16px">
+      <div style="font-size:12px;font-weight:600;color:#f57c00;text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px">📅 Lịch hẹn</div>
+      <div style="display:flex;flex-direction:column;gap:5px">
+        <div style="background:#fffbf0;border-radius:6px;padding:7px 10px"><span style="font-family:monospace;font-size:12px;color:#0a5c2f">hẹn tắt VM ThinhNNG lúc 23:00</span><div style="font-size:11px;color:#666;margin-top:2px">Tự động tắt VM theo giờ</div></div>
+        <div style="background:#fffbf0;border-radius:6px;padding:7px 10px"><span style="font-family:monospace;font-size:12px;color:#0a5c2f">hẹn bật VM ThinhNNG lúc 8:00</span><div style="font-size:11px;color:#666;margin-top:2px">Tự động bật VM theo giờ</div></div>
+        <div style="background:#fffbf0;border-radius:6px;padding:7px 10px"><span style="font-family:monospace;font-size:12px;color:#0a5c2f">xem lịch hẹn hiện tại</span><div style="font-size:11px;color:#666;margin-top:2px">Danh sách lịch đã đặt</div></div>
+        <div style="background:#fffbf0;border-radius:6px;padding:7px 10px"><span style="font-family:monospace;font-size:12px;color:#0a5c2f">hủy lịch ThinhNNG_Server</span><div style="font-size:11px;color:#666;margin-top:2px">Xóa lịch đã đặt</div></div>
+      </div>
+    </div>
+
+    <div style="background:#e8f4fd;border-radius:8px;padding:10px 12px;font-size:12px;color:#185fa5;margin-top:8px">
+      💡 Có thể nói tự nhiên — chatbot tự hiểu ý định của bạn dù dùng tiếng Việt hay tiếng Anh.
+    </div>
+  </div>
 </div>
 
 <div id="chat">
@@ -281,6 +378,12 @@ function md2html(text) {
 }
 
 
+
+// ── Help panel ────────────────────────────────────────────────────────────────
+function toggleHelp() {
+  const p = document.getElementById('help-panel');
+  p.style.display = p.style.display === 'none' ? 'block' : 'none';
+}
 
 // ── UI helpers ────────────────────────────────────────────────────────────────
 function addUser(text) {
