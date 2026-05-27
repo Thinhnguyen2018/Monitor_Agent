@@ -624,6 +624,75 @@ def detect_action_intent(message, vms, sgs, volumes=[]):
                     {"serverId": vm.get("uuid"), "serverName": vm.get("name"), "newName": new_name},
                     f"Đổi tên VM **{vm.get('name')}** thành **{new_name}**")
         return ("vm_rename", None, "Bạn muốn đổi tên VM nào thành gì?")
+    # ── Security Group Rules ─────────────────────────────────────────────────
+    if any(w in msg for w in ["thêm rule", "add rule", "mở port", "open port", "thêm inbound", "thêm outbound"]):
+        import re as _rsg
+        # Find SG
+        sg = None
+        for s in sgs:
+            sname = (s.get("name") or "").lower()
+            if sname and sname in msg:
+                sg = s
+                break
+        # Extract port
+        port_m = _rsg.search(r'port\s+(\d+)|(\d+)\s*/\s*tcp|(\d+)\s*/\s*udp', msg)
+        port = int(port_m.group(1) or port_m.group(2) or port_m.group(3)) if port_m else None
+        # Direction
+        direction = "egress" if any(w in msg for w in ["outbound", "egress", "ra"]) else "ingress"
+        # Protocol
+        protocol = "udp" if "udp" in msg else "tcp"
+        if sg and port:
+            rule = {
+                "direction": direction,
+                "etherType": "IPv4",
+                "portRangeMin": port,
+                "portRangeMax": port,
+                "protocol": protocol,
+                "remoteIpPrefix": "0.0.0.0/0",
+                "description": f"Allow {protocol} {port} {direction}"
+            }
+            return ("sg_rule_add",
+                    {"sgId": sg.get("uuid"), "sgName": sg.get("name"), "rule": rule},
+                    f"Thêm rule **{direction} {protocol} port {port}** vào Security Group **{sg.get('name')}**")
+        return ("sg_rule_add", None, "Cần biết: tên Security Group và port cần mở")
+
+    if any(w in msg for w in ["xóa rule", "remove rule", "xoá rule", "delete rule"]):
+        return ("sg_rule_remove", None, "Cần biết: tên Security Group và Rule ID cần xóa")
+
+    # ── Delete VM ─────────────────────────────────────────────────────────────
+    if any(w in msg for w in ["xóa vm", "xoá vm", "delete vm", "xóa server", "xoá server"]):
+        vm = find_vm(msg)
+        if vm:
+            return ("vm_delete",
+                    {"serverId": vm.get("uuid"), "serverName": vm.get("name")},
+                    f"⚠️ XÓA VĨNH VIỄN VM **{vm.get('name')}** — không thể khôi phục!")
+        return ("vm_delete", None, "Bạn muốn xóa VM nào?")
+
+    # ── Resize VM ─────────────────────────────────────────────────────────────
+    if any(w in msg for w in ["resize vm", "nâng cấp vm", "đổi flavor", "thay đổi cấu hình"]):
+        vm = find_vm(msg)
+        import re as _rr2
+        # Try to extract flavor from message
+        flavor_m = _rr2.search(r'(flav-[\w\-]+)', msg)
+        flavor_id = flavor_m.group(1) if flavor_m else None
+        if vm and flavor_id:
+            return ("vm_resize",
+                    {"serverId": vm.get("uuid"), "serverName": vm.get("name"), "flavorId": flavor_id},
+                    f"Resize VM **{vm.get('name')}** sang flavor **{flavor_id}**")
+        return ("vm_resize", None, "Cần biết tên VM và flavor ID mới. Hỏi 'liệt kê flavor' để xem danh sách.")
+
+    # ── Delete Volume ─────────────────────────────────────────────────────────
+    if any(w in msg for w in ["xóa volume", "xoá volume", "delete volume"]):
+        vol = find_volume(msg)
+        if vol:
+            vol_name = vol.get("name") or vol.get("volumeName")
+            if "boot" in (vol_name or "").lower():
+                return (None, None, "Không thể xóa boot volume!")
+            return ("volume_delete",
+                    {"volumeId": vol.get("uuid"), "volumeName": vol_name},
+                    f"⚠️ XÓA VĨNH VIỄN Volume **{vol_name}** — không thể khôi phục!")
+        return ("volume_delete", None, "Bạn muốn xóa Volume nào?")
+
     # ── Snapshot ─────────────────────────────────────────────────────────────
     if any(w in msg for w in ["snapshot", "tạo snapshot", "chụp", "backup vm"]):
         vm = find_vm(msg)
@@ -707,6 +776,11 @@ def chat():
         if s2 == 200: volumes = d2.get("listData", [])
         s3, d3 = gn_api(token, uid, "GET", f"v2/{P}/networks")
         if s3 == 200: networks = d3.get("listData", [])
+        # Fetch flavors and images for VM creation
+        sf, df = gn_api(token, uid, "GET", f"v2/{P}/flavors")
+        flavors = df.get("listData", []) if sf == 200 else []
+        si, di = gn_api(token, uid, "GET", f"v2/{P}/images")
+        images = di.get("listData", []) if si == 200 else []
 
         # SG from VMs
         sg_map = {}
@@ -791,6 +865,13 @@ HƯỚNG DẪN TRẢ LỜI:
   - vm_rename: {{"serverId": "uuid", "serverName": "tên", "newName": "tên mới"}}
   - volume_rename: {{"volumeId": "uuid", "volumeName": "tên", "newName": "tên mới"}}
   - sg_attach/sg_detach: {{"serverId": "uuid", "serverName": "tên", "sgIds": ["uuid"]}}
+  - sg_rule_add: {{"sgId": "uuid", "sgName": "tên", "rule": {{"direction": "ingress", "etherType": "IPv4", "portRangeMin": 80, "portRangeMax": 80, "protocol": "tcp", "remoteIpPrefix": "0.0.0.0/0"}}}}
+  - vm_snapshot: {{"serverId": "uuid", "serverName": "tên", "snapshotName": "tên"}}
+  - vm_resize: {{"serverId": "uuid", "serverName": "tên", "flavorId": "flav-xxx"}}
+  - vm_delete: {{"serverId": "uuid", "serverName": "tên"}}
+  - volume_create: {{"name": "tên", "size": 20, "volumeTypeId": "vtype-xxx"}}
+  - volume_delete: {{"volumeId": "uuid", "volumeName": "tên"}}
+  - vm_create: {{"name": "tên", "flavorId": "flav-xxx", "imageId": "img-xxx", "networkId": "net-xxx", "subnetId": "sub-xxx", "rootDiskSize": 20, "rootDiskTypeId": "vtype-xxx"}}
   ⚠️ QUAN TRỌNG: Chỉ trả về JSON thuần duy nhất, KHÔNG có text hay markdown xung quanh.
   Nếu thiếu thông tin cần thiết, hỏi lại user thay vì đoán.
 
@@ -831,7 +912,7 @@ DỮ LIỆU REAL-TIME được cập nhật mỗi lần user gửi tin nhắn.""
             return jsonify({"reply": reply, "fetchedAt": now, "actionDone": True})
 
         # Handle confirmed volume/FIP/SG actions
-        EXTENDED_CONFIRM = {"volume_attach","volume_detach","fip_associate","fip_disassociate","sg_attach","sg_detach","vm_rename","volume_rename","sg_rule_add","sg_rule_remove","vm_snapshot"}
+        EXTENDED_CONFIRM = {"volume_attach","volume_detach","fip_associate","fip_disassociate","sg_attach","sg_detach","vm_rename","volume_rename","sg_rule_add","sg_rule_remove","vm_snapshot","vm_create","vm_resize","vm_delete","volume_create","volume_delete"}
         if action_type in EXTENDED_CONFIRM:
             ok, data = execute_extended_action(token, uid, project_id, action_type, params)
             labels = {
@@ -844,6 +925,11 @@ DỮ LIỆU REAL-TIME được cập nhật mỗi lần user gửi tin nhắn.""
                 "vm_rename":        f"Đã đổi tên VM **{params.get('serverName','?')}** thành **{params.get('newName','?')}**",
                 "volume_rename":    f"Đã đổi tên Volume thành **{params.get('newName','?')}**",
                 "vm_snapshot":      f"Đã tạo snapshot VM **{params.get('serverName','?')}**",
+                "vm_create":        f"Đã tạo VM **{params.get('name','?')}**",
+                "vm_resize":        f"Đã resize VM **{params.get('serverName','?')}** sang flavor **{params.get('flavorName','?')}**",
+                "vm_delete":        f"Đã xóa VM **{params.get('serverName','?')}**",
+                "volume_create":    f"Đã tạo Volume **{params.get('name','?')}**",
+                "volume_delete":    f"Đã xóa Volume **{params.get('volumeName','?')}**",
             }
             if ok:
                 reply = f"✅ {labels.get(action_type, 'Thành công!')}"
@@ -911,7 +997,7 @@ DỮ LIỆU REAL-TIME được cập nhật mỗi lần user gửi tin nhắn.""
 
             # Extended actions (volume, FIP, SG, rename) → direct execute via action2
             # Actions requiring confirmation (medium risk)
-            CONFIRM_ACTIONS = {"volume_attach","volume_detach","fip_associate","fip_disassociate","sg_attach","sg_detach","vm_rename","volume_rename","vm_snapshot"}
+            CONFIRM_ACTIONS = {"volume_attach","volume_detach","fip_associate","fip_disassociate","sg_attach","sg_detach","vm_rename","volume_rename","vm_snapshot","vm_create","vm_resize","vm_delete","volume_create","volume_delete"}
             if action_type in CONFIRM_ACTIONS and params:
                 reply = f"⚠️ **Xác nhận hành động**\n\n{desc}\n\nBạn có chắc muốn thực hiện không? Nhấn nút bên dưới hoặc gõ **xác nhận**."
                 return jsonify({
@@ -1497,8 +1583,12 @@ def execute_extended_action(token, uid, project_id, action_type, params):
     # PUT /v2/{projectId}/volumes/{volumeId}/servers/{serverId}/detach
     # Body: {persistentVolume: bool, tags: []}
     if action_type == "volume_detach":
-        volume_id = params.get("volumeId")
-        server_id = params.get("serverId", "").replace("ins-", "")
+        volume_id   = params.get("volumeId")
+        volume_name = params.get("volumeName", "")
+        server_id   = params.get("serverId", "").replace("ins-", "")
+        # Block detach of boot volume
+        if "boot" in volume_name.lower():
+            return False, {"message": "Không thể gỡ boot volume — đây là ổ đĩa hệ thống của VM"}
         s, d = gn_api(token, uid, "PUT",
             f"v2/{P}/volumes/{volume_id}/servers/{server_id}/detach",
             {"persistentVolume": True, "tags": []})
@@ -1589,6 +1679,61 @@ def execute_extended_action(token, uid, project_id, action_type, params):
             f"v2/{P}/servers/{server_id}/snapshots",
             {"name": snap_name, "description": snap_name,
              "isPermanently": False, "retainedDays": 7})
+        return s in OK, d
+
+    # ── Create VM ────────────────────────────────────────────────────────────
+    # POST /v2/{projectId}/servers
+    # Required: name, flavorId, imageId, networkId, subnetId, rootDiskSize, rootDiskTypeId, encryptionVolume
+    if action_type == "vm_create":
+        s, d = gn_api(token, uid, "POST", f"v2/{P}/servers", {
+            "name":            params.get("name"),
+            "flavorId":        params.get("flavorId"),
+            "imageId":         params.get("imageId"),
+            "networkId":       params.get("networkId"),
+            "subnetId":        params.get("subnetId"),
+            "rootDiskSize":    params.get("rootDiskSize", 20),
+            "rootDiskTypeId":  params.get("rootDiskTypeId"),
+            "encryptionVolume": False,
+            "attachFloating":  params.get("attachFloating", False),
+            "sshKeyId":        params.get("sshKeyId"),
+            "secgroupIds":     params.get("secgroupIds", []),
+            "tags":            [],
+        })
+        return s in OK, d
+
+    # ── Resize VM ─────────────────────────────────────────────────────────────
+    # PUT /v2/{projectId}/servers/{serverId}/resize
+    # Required: flavorId, serverId
+    if action_type == "vm_resize":
+        server_id = params.get("serverId")
+        s, d = gn_api(token, uid, "PUT",
+            f"v2/{P}/servers/{server_id}/resize",
+            {"flavorId": params.get("flavorId"), "serverId": server_id})
+        return s in OK, d
+
+    # ── Delete VM ─────────────────────────────────────────────────────────────
+    # DELETE /v2/{projectId}/servers/{serverId}
+    if action_type == "vm_delete":
+        server_id = params.get("serverId")
+        s, d = gn_api(token, uid, "DELETE", f"v2/{P}/servers/{server_id}")
+        return s in OK, d
+
+    # ── Create Volume ─────────────────────────────────────────────────────────
+    # POST /v2/{projectId}/volumes
+    if action_type == "volume_create":
+        s, d = gn_api(token, uid, "POST", f"v2/{P}/volumes", {
+            "name":         params.get("name"),
+            "size":         params.get("size", 20),
+            "volumeTypeId": params.get("volumeTypeId", "vtype-2fc64a6c-38e3-4f08-93a5-18018cb3ab23"),
+            "tags":         [],
+        })
+        return s in OK, d
+
+    # ── Delete Volume ─────────────────────────────────────────────────────────
+    # DELETE /v2/{projectId}/volumes/{volumeId}
+    if action_type == "volume_delete":
+        volume_id = params.get("volumeId")
+        s, d = gn_api(token, uid, "DELETE", f"v2/{P}/volumes/{volume_id}")
         return s in OK, d
 
     return False, {"error": f"Unknown action: {action_type}"}
@@ -1833,6 +1978,11 @@ def teams_webhook():
         if s2 == 200: volumes = d2.get("listData", [])
         s3, d3 = gn_api(token, uid, "GET", f"v2/{P}/networks")
         if s3 == 200: networks = d3.get("listData", [])
+        # Fetch flavors and images for VM creation
+        sf, df = gn_api(token, uid, "GET", f"v2/{P}/flavors")
+        flavors = df.get("listData", []) if sf == 200 else []
+        si, di = gn_api(token, uid, "GET", f"v2/{P}/images")
+        images = di.get("listData", []) if si == 200 else []
 
         # SG from VMs
         sg_map = {}
