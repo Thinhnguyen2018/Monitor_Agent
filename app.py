@@ -584,21 +584,28 @@ def detect_action_intent(message, vms, sgs, volumes=[]):
         return ("volume_detach", None, "Không tìm thấy VM hoặc Volume. Hỏi 'liệt kê volume' để xem danh sách.")
 
     # ── Floating IP ───────────────────────────────────────────────────────────
-    if any(w in msg for w in ["gắn floating", "associate ip", "gắn ip công cộng"]):
+    if any(w in msg for w in ["gắn floating", "associate ip", "gắn ip công cộng", "gắn wan", "gắn ip"]):
         vm = find_vm(msg)
         import re as _re
+        # Try to find IP address or WAN IP ID from message
         ip_match = _re.search(r'(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})', msg)
-        fip = ip_match.group(1) if ip_match else None
-        if vm and fip:
+        fip_addr = ip_match.group(1) if ip_match else None
+        # Find wanIpId from networks/floating IPs list
+        wan_ip_id = fip_addr  # fallback to IP address if no ID found
+        if vm:
             return ("fip_associate",
-                    {"serverId": vm.get("uuid"), "serverName": vm.get("name"), "floatingIp": fip},
-                    f"Gắn Floating IP **{fip}** vào VM **{vm.get('name')}**")
+                    {"serverId": vm.get("uuid"), "serverName": vm.get("name"),
+                     "wanIpId": wan_ip_id, "floatingIp": fip_addr},
+                    f"Gắn Floating IP **{fip_addr or '?'}** vào VM **{vm.get('name')}**")
         return ("fip_associate", None, "Cần biết tên VM và địa chỉ Floating IP cần gắn")
-    if any(w in msg for w in ["gỡ floating", "disassociate ip", "gỡ ip công cộng"]):
+    if any(w in msg for w in ["gỡ floating", "disassociate ip", "gỡ ip công cộng", "gỡ wan", "gỡ ip"]):
         vm = find_vm(msg)
         if vm:
+            # Get current WAN IP from VM info
+            wan_ips = vm.get("externalInterfaces", []) or vm.get("wanIps", [])
+            wan_ip_id = wan_ips[0].get("uuid") if wan_ips else None
             return ("fip_disassociate",
-                    {"serverId": vm.get("uuid"), "serverName": vm.get("name")},
+                    {"serverId": vm.get("uuid"), "serverName": vm.get("name"), "wanIpId": wan_ip_id},
                     f"Gỡ Floating IP khỏi VM **{vm.get('name')}**")
         return ("fip_disassociate", None, "Bạn muốn gỡ Floating IP khỏi VM nào?")
 
@@ -617,6 +624,18 @@ def detect_action_intent(message, vms, sgs, volumes=[]):
                     {"serverId": vm.get("uuid"), "serverName": vm.get("name"), "newName": new_name},
                     f"Đổi tên VM **{vm.get('name')}** thành **{new_name}**")
         return ("vm_rename", None, "Bạn muốn đổi tên VM nào thành gì?")
+    # ── Snapshot ─────────────────────────────────────────────────────────────
+    if any(w in msg for w in ["snapshot", "tạo snapshot", "chụp", "backup vm"]):
+        vm = find_vm(msg)
+        if vm:
+            import re as _rs
+            m = _rs.search(r'(?:tên|name)\s+([\w\-\.]+)', message, _rs.IGNORECASE)
+            snap_name = m.group(1) if m else f"snapshot-{vm.get('name','vm')}"
+            return ("vm_snapshot",
+                    {"serverId": vm.get("uuid"), "serverName": vm.get("name"), "snapshotName": snap_name},
+                    f"Tạo snapshot VM **{vm.get('name')}** với tên **{snap_name}**")
+        return ("vm_snapshot", None, "Bạn muốn tạo snapshot cho VM nào?")
+
     return (None, None, None)
 
 
@@ -812,7 +831,7 @@ DỮ LIỆU REAL-TIME được cập nhật mỗi lần user gửi tin nhắn.""
             return jsonify({"reply": reply, "fetchedAt": now, "actionDone": True})
 
         # Handle confirmed volume/FIP/SG actions
-        EXTENDED_CONFIRM = {"volume_attach","volume_detach","fip_associate","fip_disassociate","sg_attach","sg_detach","vm_rename","volume_rename","sg_rule_add","sg_rule_remove"}
+        EXTENDED_CONFIRM = {"volume_attach","volume_detach","fip_associate","fip_disassociate","sg_attach","sg_detach","vm_rename","volume_rename","sg_rule_add","sg_rule_remove","vm_snapshot"}
         if action_type in EXTENDED_CONFIRM:
             ok, data = execute_extended_action(token, uid, project_id, action_type, params)
             labels = {
@@ -824,6 +843,7 @@ DỮ LIỆU REAL-TIME được cập nhật mỗi lần user gửi tin nhắn.""
                 "sg_detach":        f"Đã gỡ Security Group khỏi VM **{params.get('serverName','?')}**",
                 "vm_rename":        f"Đã đổi tên VM **{params.get('serverName','?')}** thành **{params.get('newName','?')}**",
                 "volume_rename":    f"Đã đổi tên Volume thành **{params.get('newName','?')}**",
+                "vm_snapshot":      f"Đã tạo snapshot VM **{params.get('serverName','?')}**",
             }
             if ok:
                 reply = f"✅ {labels.get(action_type, 'Thành công!')}"
@@ -891,7 +911,7 @@ DỮ LIỆU REAL-TIME được cập nhật mỗi lần user gửi tin nhắn.""
 
             # Extended actions (volume, FIP, SG, rename) → direct execute via action2
             # Actions requiring confirmation (medium risk)
-            CONFIRM_ACTIONS = {"volume_attach","volume_detach","fip_associate","fip_disassociate","sg_attach","sg_detach","vm_rename","volume_rename"}
+            CONFIRM_ACTIONS = {"volume_attach","volume_detach","fip_associate","fip_disassociate","sg_attach","sg_detach","vm_rename","volume_rename","vm_snapshot"}
             if action_type in CONFIRM_ACTIONS and params:
                 reply = f"⚠️ **Xác nhận hành động**\n\n{desc}\n\nBạn có chắc muốn thực hiện không? Nhấn nút bên dưới hoặc gõ **xác nhận**."
                 return jsonify({
@@ -1455,11 +1475,13 @@ def cancel_schedule(job_id):
 
 # ── Extended actions (Volume, FIP, SG rules, Tag) ────────────────────────────
 def execute_extended_action(token, uid, project_id, action_type, params):
-    """Execute non-VM actions using correct VNG Cloud API endpoints from docs."""
+    """Execute non-VM actions using exact endpoints from VNG Cloud OpenAPI spec."""
     P  = project_id
     OK = (200, 201, 202, 204)
 
-    # Volume attach: PUT /v2/{projectId}/volumes/{volumeId}/servers/{serverId}/attach
+    # ── Volume attach ────────────────────────────────────────────────────────
+    # PUT /v2/{projectId}/volumes/{volumeId}/servers/{serverId}/attach
+    # Body: {persistentVolume: bool, tags: [], zoneId: str}
     if action_type == "volume_attach":
         volume_id = params.get("volumeId")
         server_id = params.get("serverId", "").replace("ins-", "")
@@ -1471,65 +1493,102 @@ def execute_extended_action(token, uid, project_id, action_type, params):
         print(f"[ATTACH] -> {s} {str(d)[:150]}")
         return s in OK, d
 
-    # Volume detach: PUT /v2/{projectId}/volumes/{volumeId}/servers/{serverId}/detach
+    # ── Volume detach ────────────────────────────────────────────────────────
+    # PUT /v2/{projectId}/volumes/{volumeId}/servers/{serverId}/detach
+    # Body: {persistentVolume: bool, tags: []}
     if action_type == "volume_detach":
         volume_id = params.get("volumeId")
         server_id = params.get("serverId", "").replace("ins-", "")
         s, d = gn_api(token, uid, "PUT",
-            f"v2/{P}/volumes/{volume_id}/servers/{server_id}/detach", {})
+            f"v2/{P}/volumes/{volume_id}/servers/{server_id}/detach",
+            {"persistentVolume": True, "tags": []})
         return s in OK, d
 
-    # FIP associate: PUT /v2/{projectId}/servers/{serverId}/attach-wan-ip
+    # ── FIP associate ────────────────────────────────────────────────────────
+    # PUT /v2/{projectId}/servers/{serverId}/wan-ips/{wanIpId}/attach
+    # Body: {networkInterfaceId: str, tags: []}
     if action_type == "fip_associate":
-        server_id   = params.get("serverId")
-        floating_ip = params.get("floatingIp")
+        server_id    = params.get("serverId")
+        wan_ip_id    = params.get("wanIpId")
+        interface_id = params.get("networkInterfaceId", "")
         s, d = gn_api(token, uid, "PUT",
-            f"v2/{P}/servers/{server_id}/attach-wan-ip",
-            {"wanIp": floating_ip})
+            f"v2/{P}/servers/{server_id}/wan-ips/{wan_ip_id}/attach",
+            {"networkInterfaceId": interface_id, "tags": []})
         return s in OK, d
 
-    # FIP disassociate: PUT /v2/{projectId}/servers/{serverId}/detach-wan-ip
+    # ── FIP disassociate ─────────────────────────────────────────────────────
+    # PUT /v2/{projectId}/servers/{serverId}/wan-ips/{wanIpId}/detach
+    # Body: {networkInterfaceId: str, tags: []}
     if action_type == "fip_disassociate":
-        server_id = params.get("serverId")
+        server_id    = params.get("serverId")
+        wan_ip_id    = params.get("wanIpId")
+        interface_id = params.get("networkInterfaceId", "")
         s, d = gn_api(token, uid, "PUT",
-            f"v2/{P}/servers/{server_id}/detach-wan-ip", {})
+            f"v2/{P}/servers/{server_id}/wan-ips/{wan_ip_id}/detach",
+            {"networkInterfaceId": interface_id, "tags": []})
         return s in OK, d
 
-    # Update SecGroups: PUT /v2/{projectId}/servers/{serverId}/secgroups
+    # ── Update SecGroups ─────────────────────────────────────────────────────
+    # PUT /v2/{projectId}/servers/{serverId}/update-sec-group
+    # Body: {serverId: str, securityGroup: [str]}
     if action_type in ("sg_attach", "sg_detach"):
         server_id = params.get("serverId")
         sg_ids    = params.get("sgIds", [])
         s, d = gn_api(token, uid, "PUT",
-            f"v2/{P}/servers/{server_id}/secgroups",
-            {"secGroupIds": sg_ids})
+            f"v2/{P}/servers/{server_id}/update-sec-group",
+            {"serverId": server_id, "securityGroup": sg_ids})
         return s in OK, d
 
-    # SG rule add: POST /v2/{projectId}/securitygrouprules
+    # ── SG rule add ──────────────────────────────────────────────────────────
+    # POST /v2/{projectId}/secgroups/{secgroupId}/secgroupRules
     if action_type == "sg_rule_add":
-        rule = params.get("rule", {})
-        s, d = gn_api(token, uid, "POST", f"v2/{P}/securitygrouprules", rule)
+        sg_id = params.get("sgId")
+        rule  = params.get("rule", {})
+        s, d = gn_api(token, uid, "POST",
+            f"v2/{P}/secgroups/{sg_id}/secgroupRules", rule)
         return s in OK, d
 
-    # SG rule remove: DELETE /v2/{projectId}/securitygrouprules/{id}
+    # ── SG rule remove ───────────────────────────────────────────────────────
+    # DELETE /v2/{projectId}/secgroups/{secgroupId}/secgroupRules/{ruleId}
     if action_type == "sg_rule_remove":
+        sg_id   = params.get("sgId")
         rule_id = params.get("ruleId")
-        s, d = gn_api(token, uid, "DELETE", f"v2/{P}/securitygrouprules/{rule_id}")
+        s, d = gn_api(token, uid, "DELETE",
+            f"v2/{P}/secgroups/{sg_id}/secgroupRules/{rule_id}")
         return s in OK, d
 
-    # Rename VM: PUT /v2/{projectId}/servers/{serverId}/rename
+    # ── Rename VM ────────────────────────────────────────────────────────────
+    # PUT /v2/{projectId}/servers/{serverId}/rename
+    # Body: {newName: str, tags: []}
     if action_type == "vm_rename":
         server_id = params.get("serverId")
         new_name  = params.get("newName")
         s, d = gn_api(token, uid, "PUT",
-            f"v2/{P}/servers/{server_id}/rename", {"name": new_name, "newName": new_name})
+            f"v2/{P}/servers/{server_id}/rename",
+            {"newName": new_name, "tags": []})
         return s in OK, d
 
-    # Rename Volume: PUT /v2/{projectId}/volumes/{volumeId}/rename
+    # ── Rename Volume ────────────────────────────────────────────────────────
+    # PUT /v2/{projectId}/volumes/{volumeId}/rename
+    # Body: {newName: str, tags: []}
     if action_type == "volume_rename":
         volume_id = params.get("volumeId")
         new_name  = params.get("newName")
         s, d = gn_api(token, uid, "PUT",
-            f"v2/{P}/volumes/{volume_id}/rename", {"name": new_name})
+            f"v2/{P}/volumes/{volume_id}/rename",
+            {"newName": new_name, "tags": []})
+        return s in OK, d
+
+    # ── Create Snapshot ──────────────────────────────────────────────────────
+    # POST /v2/{projectId}/servers/{serverId}/snapshots
+    # Body: {name: str, description: str, isPermanently: bool, retainedDays: int}
+    if action_type == "vm_snapshot":
+        server_id = params.get("serverId")
+        snap_name = params.get("snapshotName", f"snapshot-{server_id[:8]}")
+        s, d = gn_api(token, uid, "POST",
+            f"v2/{P}/servers/{server_id}/snapshots",
+            {"name": snap_name, "description": snap_name,
+             "isPermanently": False, "retainedDays": 7})
         return s in OK, d
 
     return False, {"error": f"Unknown action: {action_type}"}
