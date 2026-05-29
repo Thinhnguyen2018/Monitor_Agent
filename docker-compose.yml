@@ -1,0 +1,12 @@
+services:
+  greennode-agent:
+    build: .
+    container_name: greennode-agent
+    ports:
+      - "127.0.0.1:8000:8000"
+    volumes:
+      - ./credentials.db:/app/credentials.db
+      - ./.env:/app/.env:ro
+    environment:
+      - FLASK_ENV=production
+    restart: unless-stopped
