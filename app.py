@@ -2,14 +2,13 @@
 GreenNode AI Agent — Flask Backend
 Deploy: gunicorn app:app -w 2 -b 0.0.0.0:8000
 """
-import os, requests, json
-from flask import Flask, request, jsonify, send_from_directory
+import os, re, json, hashlib, base64, requests
+from flask import Flask, request, jsonify, send_from_directory, session, redirect
 from flask_cors import CORS
 from functools import wraps
 from datetime import datetime, timedelta
 import threading
 from dotenv import load_dotenv
-from flask import session, redirect, url_for
 try:
     import psycopg2
     import psycopg2.extras
@@ -195,10 +194,7 @@ _scheduled_jobs = {}  # job_id → {desc, action, params, creds, run_time}
 
 @app.after_request
 def add_headers(response):
-    # Allow Teams to load in iframe + skip ngrok browser warning
     response.headers['ngrok-skip-browser-warning'] = 'true'
-    response.headers['X-Frame-Options'] = 'ALLOWALL'
-    response.headers['Content-Security-Policy'] = "frame-ancestors *"
     return response
 
 # ── Config từ .env ────────────────────────────────────────────────────────────
@@ -234,7 +230,6 @@ def fetch_gn_token(client_id, client_secret):
     if cached:
         return cached["token"], cached["user_info"]
 
-    import base64
     b64 = base64.b64encode(f"{client_id}:{client_secret}".encode()).decode()
     r = requests.post(GN_TOKEN_URL,
         headers={"Authorization": f"Basic {b64}", "Content-Type": "application/x-www-form-urlencoded"},
@@ -403,7 +398,6 @@ def detect_action_intent(message, vms, sgs, volumes=[]):
     Returns (action_type, params, description) or (None, None, None).
     Schedule intents are checked FIRST before immediate actions.
     """
-    import re
     from datetime import datetime as dt
     msg = message.lower()
 
@@ -545,8 +539,7 @@ def detect_action_intent(message, vms, sgs, volumes=[]):
             if vname and vname in text.lower():
                 return vol
         # Try extracting word after "volume" keyword
-        import re as _re2
-        m = _re2.search(r'volume\s+([\w\-\.]+)', text.lower())
+        m = re.search(r'volume\s+([\w\-\.]+)', text.lower())
         if m:
             keyword = m.group(1)
             for vol in volumes:
@@ -586,9 +579,7 @@ def detect_action_intent(message, vms, sgs, volumes=[]):
     # ── Floating IP ───────────────────────────────────────────────────────────
     if any(w in msg for w in ["gắn floating", "associate ip", "gắn ip công cộng", "gắn wan", "gắn ip"]):
         vm = find_vm(msg)
-        import re as _re
-        # Try to find IP address or WAN IP ID from message
-        ip_match = _re.search(r'(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})', msg)
+        ip_match = re.search(r'(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})', msg)
         fip_addr = ip_match.group(1) if ip_match else None
         # Find wanIpId from networks/floating IPs list
         wan_ip_id = fip_addr  # fallback to IP address if no ID found
@@ -611,9 +602,7 @@ def detect_action_intent(message, vms, sgs, volumes=[]):
 
     # ── Rename ────────────────────────────────────────────────────────────────
     if any(w in msg for w in ["đổi tên", "rename", "doi ten"]):
-        import re as _rr
-        # Use original message (not lowercased) to preserve case of new name
-        m = _rr.search(r'(?:thanh|thành|sang|to)\s+([\w\-\.]+)', message, _rr.IGNORECASE)
+        m = re.search(r'(?:thanh|thành|sang|to)\s+([\w\-\.]+)', message, re.IGNORECASE)
         new_name = m.group(1) if m else None
         if not new_name:
             words = [w for w in message.split() if len(w) > 3]
@@ -626,8 +615,6 @@ def detect_action_intent(message, vms, sgs, volumes=[]):
         return ("vm_rename", None, "Bạn muốn đổi tên VM nào thành gì?")
     # ── Security Group Rules ─────────────────────────────────────────────────
     if any(w in msg for w in ["thêm rule", "add rule", "mở port", "open port", "thêm inbound", "thêm outbound"]):
-        import re as _rsg
-        # Find SG
         sg = None
         for s in sgs:
             sname = (s.get("name") or "").lower()
@@ -635,7 +622,7 @@ def detect_action_intent(message, vms, sgs, volumes=[]):
                 sg = s
                 break
         # Extract port
-        port_m = _rsg.search(r'port\s+(\d+)|(\d+)\s*/\s*tcp|(\d+)\s*/\s*udp', msg)
+        port_m = re.search(r'port\s+(\d+)|(\d+)\s*/\s*tcp|(\d+)\s*/\s*udp', msg)
         port = int(port_m.group(1) or port_m.group(2) or port_m.group(3)) if port_m else None
         # Direction
         direction = "egress" if any(w in msg for w in ["outbound", "egress", "ra"]) else "ingress"
@@ -671,9 +658,7 @@ def detect_action_intent(message, vms, sgs, volumes=[]):
     # ── Resize VM ─────────────────────────────────────────────────────────────
     if any(w in msg for w in ["resize vm", "nâng cấp vm", "đổi flavor", "thay đổi cấu hình"]):
         vm = find_vm(msg)
-        import re as _rr2
-        # Try to extract flavor from message
-        flavor_m = _rr2.search(r'(flav-[\w\-]+)', msg)
+        flavor_m = re.search(r'(flav-[\w\-]+)', msg)
         flavor_id = flavor_m.group(1) if flavor_m else None
         if vm and flavor_id:
             return ("vm_resize",
@@ -697,8 +682,7 @@ def detect_action_intent(message, vms, sgs, volumes=[]):
     if any(w in msg for w in ["snapshot", "tạo snapshot", "chụp", "backup vm"]):
         vm = find_vm(msg)
         if vm:
-            import re as _rs
-            m = _rs.search(r'(?:tên|name)\s+([\w\-\.]+)', message, _rs.IGNORECASE)
+            m = re.search(r'(?:tên|name)\s+([\w\-\.]+)', message, re.IGNORECASE)
             snap_name = m.group(1) if m else f"snapshot-{vm.get('name','vm')}"
             return ("vm_snapshot",
                     {"serverId": vm.get("uuid"), "serverName": vm.get("name"), "snapshotName": snap_name},
@@ -1063,23 +1047,22 @@ DỮ LIỆU REAL-TIME được cập nhật mỗi lần user gửi tin nhắn.""
         reply = data["choices"][0]["message"]["content"]
         
         # Check if LLM returned structured action JSON
-        import json as _json, re as _re
         action_data = None
         reply_work = reply.strip()
-        
+
         # Try 1: Strip ```json ... ``` blocks and parse
-        cleaned = _re.sub(r'```(?:json)?\s*', '', reply_work).strip().rstrip('`').strip()
+        cleaned = re.sub(r'```(?:json)?\s*', '', reply_work).strip().rstrip('`').strip()
         try:
-            d = _json.loads(cleaned)
+            d = json.loads(cleaned)
             if "__action__" in d:
                 action_data = d
         except: pass
         
         # Try 2: Find JSON object anywhere in reply
         if not action_data:
-            for m in _re.finditer(r'\{[^{}]*"__action__"[^{}]*\}', reply_work, _re.DOTALL):
+            for m in re.finditer(r'\{[^{}]*"__action__"[^{}]*\}', reply_work, re.DOTALL):
                 try:
-                    d = _json.loads(m.group())
+                    d = json.loads(m.group())
                     if "__action__" in d:
                         action_data = d
                         break
@@ -1087,9 +1070,9 @@ DỮ LIỆU REAL-TIME được cập nhật mỗi lần user gửi tin nhắn.""
         
         # Try 3: Find JSON in code block content
         if not action_data:
-            for m in _re.finditer(r'```(?:json)?\s*(\{.*?\})\s*```', reply_work, _re.DOTALL):
+            for m in re.finditer(r'```(?:json)?\s*(\{.*?\})\s*```', reply_work, re.DOTALL):
                 try:
-                    d = _json.loads(m.group(1))
+                    d = json.loads(m.group(1))
                     if "__action__" in d:
                         action_data = d
                         break
@@ -1255,166 +1238,6 @@ def action():
         return jsonify({"error": str(e)}), 500
 
 
-# ── Microsoft Teams Bot (Azure Bot Framework) ─────────────────────────────────
-AZURE_APP_ID       = os.getenv("AZURE_APP_ID", "")
-AZURE_APP_PASSWORD = os.getenv("AZURE_APP_PASSWORD", "")
-
-def get_azure_token():
-    """Get Azure Bot Framework token to send proactive messages."""
-    r = requests.post(
-        "https://login.microsoftonline.com/botframework.com/oauth2/v2.0/token",
-        data={
-            "grant_type":    "client_credentials",
-            "client_id":     AZURE_APP_ID,
-            "client_secret": AZURE_APP_PASSWORD,
-            "scope":         "https://api.botframework.com/.default",
-        },
-        timeout=10
-    )
-    return r.json().get("access_token", "")
-
-def send_teams_reply(activity: dict, reply_text: str):
-    """Send reply back to Teams via Bot Framework."""
-    az_token   = get_azure_token()
-    service_url = activity.get("serviceUrl", "")
-    conv_id     = activity.get("conversation", {}).get("id", "")
-    activity_id = activity.get("id", "")
-
-    reply = {
-        "type":         "message",
-        "text":         reply_text,
-        "conversation": activity.get("conversation"),
-        "from":         activity.get("recipient"),
-        "recipient":    activity.get("from"),
-        "replyToId":    activity_id,
-    }
-    requests.post(
-        f"{service_url}v3/conversations/{conv_id}/activities/{activity_id}",
-        headers={"Authorization": f"Bearer {az_token}", "Content-Type": "application/json"},
-        json=reply,
-        timeout=15
-    )
-
-@app.route("/api/teams-bot", methods=["POST"])
-def teams_bot():
-    """
-    Azure Bot Framework endpoint for Teams.
-    Teams → Azure Bot → POST here → reply via Bot Framework API.
-    """
-    activity = request.get_json() or {}
-    activity_type = activity.get("type", "")
-
-    # Only handle messages
-    if activity_type != "message":
-        return jsonify({}), 200
-
-    # Extract message — strip <at>BotName</at> mention
-    import re
-    raw_text = activity.get("text", "")
-    message  = re.sub(r"<at>[^<]*</at>", "", raw_text).strip()
-    sender   = activity.get("from", {}).get("name", "User")
-
-    if not message:
-        return jsonify({}), 200
-
-    # Use Teams GN credentials from .env
-    cid  = TEAMS_GN_CLIENT_ID
-    csec = TEAMS_GN_CLIENT_SECRET
-    proj = TEAMS_GN_PROJECT_ID
-
-    if not cid or not csec or not proj:
-        send_teams_reply(activity,
-            "⚠️ Chưa cấu hình GreenNode credentials.\n"
-            "Admin vui lòng thêm TEAMS_GN_CLIENT_ID, TEAMS_GN_CLIENT_SECRET, "
-            "TEAMS_GN_PROJECT_ID vào file .env và restart server."
-        )
-        return jsonify({}), 200
-
-    try:
-        token, user_info = fetch_gn_token(cid, csec)
-        uid = str(user_info.get("accountId") or user_info.get("userId", "0"))
-        P   = proj
-
-        # Fetch real-time data
-        vms, volumes, networks, sgs = [], [], [], []
-        s1, d1 = gn_api(token, uid, "GET", f"v2/{P}/servers")
-        if s1 == 200: vms = d1.get("listData", [])
-        s2, d2 = gn_api(token, uid, "GET", f"v2/{P}/volumes")
-        if s2 == 200: volumes = d2.get("listData", [])
-        s3, d3 = gn_api(token, uid, "GET", f"v2/{P}/networks")
-        if s3 == 200: networks = d3.get("listData", [])
-
-        sg_map = {}
-        for s in vms:
-            for sg in s.get("secGroups", []):
-                k = sg.get("uuid", "")
-                if k not in sg_map:
-                    sg_map[k] = {**sg, "servers": []}
-                sg_map[k]["servers"].append(s["name"])
-        sgs = list(sg_map.values())
-
-        fips = []
-        for s in vms:
-            for iface in s.get("internalInterfaces", []):
-                if iface.get("floatingIp"):
-                    fips.append({"ip": iface["floatingIp"], "server": s["name"]})
-
-        # Check action intent
-        action_type, params, desc = detect_action_intent(message, vms, sgs, volumes)
-        if action_type and params:
-            lower = message.lower()
-            if any(w in lower for w in ["xác nhận", "confirm", "yes", "có", "đồng ý"]):
-                ok, err, vm_after = execute_vm_action(token, uid, proj, action_type, params)
-                if ok:
-                    st = vm_after.get("status", "đang xử lý") if vm_after else "đang xử lý"
-                    reply = f"✅ Thành công! VM **{params.get('serverName')}**: {st}"
-                else:
-                    reply = f"❌ Thất bại: {err}"
-            else:
-                reply = (f"⚠️ **Xác nhận hành động**\n\n{desc}\n\n"
-                         f"Gõ **xác nhận** để thực hiện hoặc **hủy** để bỏ qua.")
-            send_teams_reply(activity, reply)
-            return jsonify({}), 200
-
-        # Ask LLM
-        def fmt_vm(s):
-            ip  = s.get("internalInterfaces",[{}])[0].get("fixedIp","N/A") if s.get("internalInterfaces") else "N/A"
-            wan = s.get("internalInterfaces",[{}])[0].get("floatingIp","N/A") if s.get("internalInterfaces") else "N/A"
-            return f"VM|{s.get('name')}|{s.get('status')}|{ip}|{wan}|{s.get('flavor',{}).get('name','?')}"
-
-        context = f"""PROJECT: {proj} | User: {sender}
-VMs ({len(vms)}): {chr(10).join(fmt_vm(s) for s in vms) or "(none)"}
-Volumes ({len(volumes)}): {", ".join((v.get("name","")+" "+str(v.get("status",""))) for v in volumes) or "(none)"}
-SGs ({len(sgs)}): {", ".join(sg.get("name","") for sg in sgs) or "(none)"}
-Networks ({len(networks)}): {", ".join(n.get("name","") for n in networks) or "(none)"}
-FIPs ({len(fips)}): {", ".join(f["ip"]+"("+f["server"]+")" for f in fips) or "(none)"}"""
-
-        system_prompt = f"""Bạn là GreenNode AI Assistant trong Microsoft Teams.
-Trả lời NGẮN GỌN tối đa 5-6 dòng. Dùng emoji. Không dùng bảng phức tạp.
-Dữ liệu real-time từ GreenNode API:
-{context}"""
-
-        r = requests.post(
-            GN_MAAS_URL,
-            headers={"Authorization": f"Bearer {GN_MAAS_API_KEY}", "Content-Type": "application/json"},
-            json={
-                "model": GN_MAAS_MODEL,
-                "messages": [
-                    {"role": "assistant", "content": system_prompt},
-                    {"role": "user",      "content": message}
-                ],
-                "max_tokens": 500, "temperature": 0.5,
-            },
-            timeout=30, verify=False,
-        )
-        r.raise_for_status()
-        reply = r.json()["choices"][0]["message"]["content"]
-        send_teams_reply(activity, reply)
-
-    except Exception as e:
-        send_teams_reply(activity, f"❌ Lỗi: {str(e)}")
-
-    return jsonify({}), 200
 
 
 
@@ -1481,56 +1304,18 @@ def schedule_action():
     client_id     = body.get("clientId", "")
     client_secret = body.get("clientSecret", "")
     project_id    = body.get("projectId", "")
-    action_type   = body.get("action", "")   # vm_start, vm_stop
-    params        = body.get("params", {})   # {serverId, serverName}
-    run_at_str    = body.get("runAt", "")    # ISO format: "2026-05-20T03:30:00"
+    action_type   = body.get("action", "")
+    params        = body.get("params", {})
+    run_at_str    = body.get("runAt", "")
     tz_str        = body.get("timezone", "Asia/Ho_Chi_Minh")
 
     if not all([client_id, project_id, action_type, params, run_at_str]):
         return jsonify({"error": "Thiếu thông tin: clientId, projectId, action, params, runAt"}), 400
 
-    try:
-        tz       = pytz.timezone(tz_str)
-        run_time = datetime.fromisoformat(run_at_str)
-        if run_time.tzinfo is None:
-            run_time = tz.localize(run_time)
-
-        now = datetime.now(tz)
-        if run_time <= now:
-            diff = now - run_time
-            hours = int(diff.total_seconds() // 3600)
-            mins  = int((diff.total_seconds() % 3600) // 60)
-            return jsonify({
-                "error": f"⏰ Thời gian {run_time.strftime('%H:%M ngày %d/%m/%Y')} đã qua {hours}h{mins:02d}p rồi. Vui lòng chọn thời gian trong tương lai."
-            }), 400
-
-        job_id = f"{action_type}_{params.get('serverId','')[:8]}_{run_time.strftime('%Y%m%d%H%M')}"
-        _scheduled_jobs[job_id] = {
-            "desc":    f"{action_type} {params.get('serverName','')} lúc {run_time.strftime('%H:%M %d/%m/%Y')}",
-            "action":  action_type,
-            "params":  params,
-            "creds":   {"clientId": client_id, "clientSecret": client_secret, "projectId": project_id},
-            "run_time": run_time.isoformat(),
-        }
-
-        scheduler.add_job(
-            run_scheduled_job,
-            trigger="date",
-            run_date=run_time,
-            args=[job_id],
-            id=job_id,
-            replace_existing=True,
-        )
-
-        action_label = "khởi động" if action_type == "vm_start" else "tắt"
-        return jsonify({
-            "ok":      True,
-            "jobId":   job_id,
-            "message": f"✅ Đã hẹn {action_label} VM **{params.get('serverName')}** lúc {run_time.strftime('%H:%M ngày %d/%m/%Y')}",
-            "runAt":   run_time.isoformat(),
-        })
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+    result = _do_schedule(client_id, client_secret, project_id, action_type, params, run_at_str, tz_str)
+    if result["ok"]:
+        return jsonify(result)
+    return jsonify({"error": result.get("error", "Lỗi đặt lịch")}), 400
 
 @app.route("/api/schedule", methods=["GET"])
 def list_schedules():
@@ -1738,45 +1523,6 @@ def execute_extended_action(token, uid, project_id, action_type, params):
 
     return False, {"error": f"Unknown action: {action_type}"}
 
-def teams_config():
-    """Required by Teams for configurable tabs."""
-    return """<!DOCTYPE html>
-<html>
-<head>
-<meta charset="UTF-8">
-<script src="https://res.cdn.office.net/teams-js/2.22.0/js/MicrosoftTeams.min.js"></script>
-<style>
-  body{font-family:-apple-system,sans-serif;padding:2rem;background:#f0f2f5;display:flex;align-items:center;justify-content:center;height:100vh;margin:0}
-  .box{background:#fff;padding:2rem;border-radius:12px;text-align:center;box-shadow:0 2px 12px rgba(0,0,0,0.1)}
-  h2{color:#185fa5;margin-bottom:1rem}
-  p{color:#555;margin-bottom:1.5rem}
-  button{background:#185fa5;color:#fff;border:none;padding:10px 24px;border-radius:8px;font-size:14px;cursor:pointer}
-</style>
-</head>
-<body>
-<div class="box">
-  <h2>🖥️ GreenNode AI Agent</h2>
-  <p>Click Save để thêm GreenNode chatbot vào channel này.</p>
-  <button onclick="save()">Save</button>
-</div>
-<script>
-microsoftTeams.app.initialize().then(() => {
-  microsoftTeams.pages.config.registerOnSaveHandler((saveEvent) => {
-    microsoftTeams.pages.config.setConfig({
-      suggestedDisplayName: "GreenNode",
-      entityId: "greennode-tab",
-      contentUrl: window.location.origin + "/",
-      websiteUrl: window.location.origin + "/"
-    });
-    saveEvent.notifySuccess();
-  });
-});
-function save() {
-  microsoftTeams.pages.config.setValidityState(true);
-}
-</script>
-</body>
-</html>"""
 
 
 # ── End-user customer chat page ───────────────────────────────────────────────
@@ -1846,8 +1592,6 @@ document.getElementById('u').focus();
 </body>
 </html>"""
 
-import hashlib, secrets as _secrets
-
 def make_admin_token():
     """Generate a deterministic token from credentials."""
     raw = f"{ADMIN_USERNAME}:{ADMIN_PASSWORD}:{app.secret_key}"
@@ -1883,182 +1627,6 @@ def index():
     return send_from_directory("static", "index.html")
 
 
-# ── Microsoft Teams Outgoing Webhook ─────────────────────────────────────────
-import hmac, hashlib, base64
-
-TEAMS_WEBHOOK_SECRET = os.getenv("TEAMS_WEBHOOK_SECRET", "")
-# Default GreenNode credentials for Teams (set in .env)
-TEAMS_GN_CLIENT_ID     = os.getenv("TEAMS_GN_CLIENT_ID", "")
-TEAMS_GN_CLIENT_SECRET = os.getenv("TEAMS_GN_CLIENT_SECRET", "")
-TEAMS_GN_PROJECT_ID    = os.getenv("TEAMS_GN_PROJECT_ID", "")
-
-def verify_teams_signature(request_body: bytes, auth_header: str) -> bool:
-    """Verify Teams HMAC signature to ensure request is from Microsoft."""
-    if not TEAMS_WEBHOOK_SECRET or not auth_header:
-        return True  # Skip verification if secret not configured
-    try:
-        token = auth_header.replace("HMAC ", "")
-        secret_bytes = base64.b64decode(TEAMS_WEBHOOK_SECRET)
-        expected = base64.b64encode(
-            hmac.new(secret_bytes, request_body, hashlib.sha256).digest()
-        ).decode()
-        return hmac.compare_digest(token, expected)
-    except Exception:
-        return False
-
-def teams_card(text: str) -> dict:
-    """Build a simple Teams Adaptive Card response."""
-    return {
-        "type": "message",
-        "attachments": [{
-            "contentType": "application/vnd.microsoft.card.adaptive",
-            "content": {
-                "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
-                "type":    "AdaptiveCard",
-                "version": "1.4",
-                "body": [{
-                    "type": "TextBlock",
-                    "text": text,
-                    "wrap": True,
-                    "markdown": True,
-                }]
-            }
-        }]
-    }
-
-def teams_simple(text: str) -> dict:
-    """Simple text response for Teams."""
-    return {"type": "message", "text": text}
-
-@app.route("/api/teams", methods=["POST"])
-def teams_webhook():
-    """
-    Microsoft Teams Outgoing Webhook endpoint.
-    Teams sends POST here when user types @BotName <message>.
-    Setup: Teams → channel settings → Manage → Outgoing Webhooks → Add
-    """
-    # Verify signature
-    raw_body = request.get_data()
-    auth_header = request.headers.get("Authorization", "")
-    if not verify_teams_signature(raw_body, auth_header):
-        return jsonify({"type": "message", "text": "❌ Unauthorized"}), 401
-
-    body = request.get_json() or {}
-    # Extract message text — strip bot mention (@BotName)
-    raw_text = body.get("text", "")
-    # Teams wraps mention in <at>BotName</at> — strip it
-    import re
-    message = re.sub(r"<at>[^<]*</at>", "", raw_text).strip()
-    sender  = body.get("from", {}).get("name", "User")
-
-    if not message:
-        return jsonify(teams_simple("Xin chào! Hỏi tôi về hạ tầng GreenNode của bạn."))
-
-    # Use Teams-specific credentials from .env
-    cid   = TEAMS_GN_CLIENT_ID
-    csec  = TEAMS_GN_CLIENT_SECRET
-    proj  = TEAMS_GN_PROJECT_ID
-
-    if not cid or not csec or not proj:
-        return jsonify(teams_simple(
-            "⚠️ Chưa cấu hình GreenNode credentials cho Teams.\n"
-            "Thêm TEAMS_GN_CLIENT_ID, TEAMS_GN_CLIENT_SECRET, TEAMS_GN_PROJECT_ID vào .env"
-        ))
-
-    try:
-        # Fetch GreenNode token + data
-        token, user_info = fetch_gn_token(cid, csec)
-        uid = str(user_info.get("accountId") or user_info.get("userId", "0"))
-        P   = proj
-
-        vms, volumes, networks = [], [], []
-        s1, d1 = gn_api(token, uid, "GET", f"v2/{P}/servers")
-        if s1 == 200: vms = d1.get("listData", [])
-        s2, d2 = gn_api(token, uid, "GET", f"v2/{P}/volumes")
-        if s2 == 200: volumes = d2.get("listData", [])
-        s3, d3 = gn_api(token, uid, "GET", f"v2/{P}/networks")
-        if s3 == 200: networks = d3.get("listData", [])
-        # Fetch flavors and images for VM creation
-        sf, df = gn_api(token, uid, "GET", f"v2/{P}/flavors")
-        flavors = df.get("listData", []) if sf == 200 else []
-        si, di = gn_api(token, uid, "GET", f"v2/{P}/images")
-        images = di.get("listData", []) if si == 200 else []
-
-        # SG from VMs
-        sg_map = {}
-        for s in vms:
-            for sg in s.get("secGroups", []):
-                k = sg.get("uuid", "")
-                if k not in sg_map:
-                    sg_map[k] = {**sg, "servers": []}
-                sg_map[k]["servers"].append(s["name"])
-        sgs = list(sg_map.values())
-
-        # FIPs
-        fips = []
-        for s in vms:
-            for iface in s.get("internalInterfaces", []):
-                if iface.get("floatingIp"):
-                    fips.append({"ip": iface["floatingIp"], "server": s["name"], "status": iface.get("status","")})
-
-        # Check for action intent (stop/start/reboot)
-        action_type, params, desc = detect_action_intent(message, vms, sgs, volumes)
-        if action_type and params:
-            # For Teams: execute action directly (no confirm flow)
-            # Add confirmation word detection
-            confirm_words = ["xác nhận", "confirm", "yes", "có", "đồng ý"]
-            cancel_words  = ["hủy", "cancel", "không", "no"]
-            lower_msg = message.lower()
-
-            if any(w in lower_msg for w in confirm_words):
-                ok, err, vm_after = execute_vm_action(token, uid, proj, action_type, params)
-                if ok:
-                    st = vm_after.get("status","?") if vm_after else "đang xử lý"
-                    return jsonify(teams_simple(f"✅ Thành công! VM {params.get('serverName')}: {st}"))
-                else:
-                    return jsonify(teams_simple(f"❌ Thất bại: {err}"))
-            else:
-                # Ask for confirmation in Teams
-                return jsonify(teams_simple(
-                    f"⚠️ **Xác nhận hành động**\n\n{desc}\n\n"
-                    f"Gõ **@Bot xác nhận** để thực hiện hoặc **@Bot hủy** để bỏ qua."
-                ))
-
-        # Build context and ask LLM
-        def fmt_vm(s):
-            ip  = s.get("internalInterfaces",[{}])[0].get("fixedIp","N/A") if s.get("internalInterfaces") else "N/A"
-            wan = s.get("internalInterfaces",[{}])[0].get("floatingIp","N/A") if s.get("internalInterfaces") else "N/A"
-            sgs_str = ", ".join(g.get("name","") for g in s.get("secGroups",[]))
-            return f"VM|{s.get('name')}|{s.get('status')}|{ip}|{wan}|{s.get('flavor',{}).get('name','?')}|SG:[{sgs_str}]"
-
-        context = f"""PROJECT: {proj} | Hỏi bởi: {sender}
-VMs ({len(vms)}): {chr(10).join(fmt_vm(s) for s in vms) or "(none)"}
-Volumes ({len(volumes)}): {", ".join(v.get("name","") + " " + str(v.get("status","")) for v in volumes) or "(none)"}
-Security Groups ({len(sgs)}): {", ".join(sg.get("name","") for sg in sgs) or "(none)"}
-Networks ({len(networks)}): {", ".join(n.get("name","") for n in networks) or "(none)"}
-Floating IPs ({len(fips)}): {", ".join(f["ip"]+" ("+f["server"]+")" for f in fips) or "(none)"}"""
-
-        system_prompt = f"""Bạn là GreenNode AI Assistant trong Microsoft Teams.
-Trả lời NGẮN GỌN (tối đa 5 dòng) vì Teams có giới hạn hiển thị.
-Dùng emoji thay cho markdown phức tạp. Không dùng bảng.
-Dữ liệu real-time:
-{context}"""
-
-        r = requests.post(
-            GN_MAAS_URL,
-            headers={"Authorization": f"Bearer {GN_MAAS_API_KEY}", "Content-Type": "application/json"},
-            json={"model": GN_MAAS_MODEL, "messages": [
-                {"role": "assistant", "content": system_prompt},
-                {"role": "user",      "content": message}
-            ], "max_tokens": 500, "temperature": 0.5},
-            timeout=30, verify=False,
-        )
-        r.raise_for_status()
-        reply = r.json()["choices"][0]["message"]["content"]
-        return jsonify(teams_simple(reply))
-
-    except Exception as e:
-        return jsonify(teams_simple(f"❌ Lỗi: {str(e)}"))
 
 @app.route("/health")
 def health():
