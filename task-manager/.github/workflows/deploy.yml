@@ -1,0 +1,75 @@
+name: Deploy Task Manager
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build and push image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: |
+            nguyenngocgiathinh/greennode-task-manager:latest
+            nguyenngocgiathinh/greennode-task-manager:${{ github.sha }}
+
+      - name: Get IAM token
+        id: token
+        run: |
+          TOKEN=$(curl -s --max-time 10 -X POST "http://103.196.239.110/api/proxy/token" \
+            -H "Content-Type: application/json" \
+            -H "X-Proxy-Secret: admin12345" \
+            -d "{\"client_id\":\"${{ secrets.AGENTBASE_CLIENT_ID }}\",\"client_secret\":\"${{ secrets.AGENTBASE_CLIENT_SECRET }}\"}" \
+            | python3 -c "import sys,json; print(json.load(sys.stdin).get('token',''))")
+          if [ -z "$TOKEN" ]; then
+            TOKEN=$(curl -s -X POST "https://iam.api.vngcloud.vn/accounts-api/v2/auth/token" \
+              -u "${{ secrets.AGENTBASE_CLIENT_ID }}:${{ secrets.AGENTBASE_CLIENT_SECRET }}" \
+              -d "grant_type=client_credentials" \
+              -H "Content-Type: application/x-www-form-urlencoded" \
+              | python3 -c "import sys,json; print(json.load(sys.stdin).get('access_token',''))")
+          fi
+          echo "token=$TOKEN" >> $GITHUB_OUTPUT
+
+      - name: Deploy to AgentBase
+        run: |
+          IMAGE="nguyenngocgiathinh/greennode-task-manager:${{ github.sha }}"
+          PAYLOAD=$(python3 -c "
+          import json
+          body = {
+            'imageUrl': '$IMAGE',
+            'flavorId': 'runtime-s2-general-2x4',
+            'description': 'GreenNode AI Lab Task Manager',
+            'command': [],
+            'args': [],
+            'environmentVariables': {
+              'DATABASE_URL': '${{ secrets.TASK_MANAGER_DATABASE_URL }}'
+            },
+            'autoscaling': {'minReplicas': 1, 'maxReplicas': 1, 'cpuUtilization': 50, 'memoryUtilization': 50},
+            'imageAuth': {'enabled': False}
+          }
+          print(json.dumps(body))
+          ")
+
+          RESULT=$(curl -s -X PATCH \
+            "https://agentbase.api.vngcloud.vn/runtime/agent-runtimes/runtime-042f8586-02f1-4244-8740-91083a0f1afe" \
+            -H "Authorization: Bearer ${{ steps.token.outputs.token }}" \
+            -H "Content-Type: application/json" \
+            -d "$PAYLOAD")
+
+          echo "Response: $RESULT"
+          STATUS=$(echo "$RESULT" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('status','ERROR'))")
+          echo "Runtime status: $STATUS"
